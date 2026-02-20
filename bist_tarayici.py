@@ -389,9 +389,9 @@ if st.session_state.done:
                 st.metric("EMA 55", row["EMA55"])
 else:
     st.info("Sol panelden periyot ve strateji sec, ardından TARAMAYI BASLAT butonuna bas.")
-```
 
----
+
+
 
 **`requirements.txt` içeriği:**
 ```
