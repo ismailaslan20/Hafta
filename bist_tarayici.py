@@ -348,7 +348,7 @@ else:
     3. **TARAMAYI BAŞLAT** butonuna bas
     4. Sonuçlardan hisse seç → grafik gör
     """)
-```
+
 
 ---
 
