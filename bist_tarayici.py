@@ -350,7 +350,7 @@ else:
     """)
 
 
----
+
 
 **DOSYA 2: `requirements.txt`** (yoksa yeni oluştur)
 ```
