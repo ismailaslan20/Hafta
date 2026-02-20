@@ -1,33 +1,54 @@
 import streamlit as st
+import pandas as pd
+import numpy as np
 
-# Sayfa ayarları (Mobilde düzgün görünmesi için geniş mod)
-st.set_page_config(page_title="Mobil Tarama Paneli", layout="wide")
+# Sayfa ayarlarını mobil için optimize ediyoruz
+st.set_page_config(page_title="Pusu Tarama Motoru", layout="wide")
 
-st.title("📱 Mobil Analiz Paneli")
+st.title("🚀 Pusu Tarama Paneli")
+st.write("Teknik analiz ve sinyal tarayıcı")
+
+# Üst Menü - Ayarlar
+with st.container():
+    col1, col2 = st.columns(2)
+    with col1:
+        # Hata aldığın o meşhur 46. satırı burada düzelttim
+        periyot = st.selectbox("Tarama Periyodu", ["1h", "4h", "1d", "1w"])
+    with col2:
+        hisse_tipi = st.selectbox("Pazar/Borsa", ["Kripto", "BIST100", "Nasdaq"])
+
+# Tarama Filtreleri
 st.markdown("---")
+st.subheader("🔍 Tarama Kriterleri")
+st.info("Aşağıdaki kriterlere göre piyasa taranacaktır.")
 
-# Hata aldığın o meşhur sütun ve seçim kısmı burası:
-col1, col2 = st.columns(2)
+c1, c2, c3 = st.columns(3)
+with c1:
+    rsi_filtre = st.checkbox("RSI (Aşırı Satım)", value=True)
+with c2:
+    golden_cross = st.checkbox("Golden Cross", value=True)
+with c3:
+    vol_artisi = st.checkbox("Hacim Artışı", value=True)
 
-with col1:
-    # 46. satırdaki hatayı burada düzelttim: Tırnaklar ve parantezler kapalı.
-    periyot = st.selectbox("Periyot Seçimi", ["1s", "4s", "1 Gün", "1 Hafta"])
-
-with col2:
-    sembol = st.text_input("Sembol Giriniz", value="BTCUSDT")
-
-st.markdown("---")
-
-# Alt kısım: İşlem butonları ve sonuç alanı
-if st.button("Taramayı Başlat", use_container_width=True):
-    st.success(f"✅ {sembol} için {periyot} periyodunda tarama başlatıldı...")
+# Tarama Butonu (Mobil uyumlu genişlikte)
+if st.button("TARAMAYI BAŞLAT", use_container_width=True):
+    st.success(f"✅ {hisse_tipi} pazarı {periyot} periyodunda taranıyor...")
     
-    # Buraya kendi analiz mantığını veya verilerini ekleyebilirsin
-    st.info("Veriler çekiliyor, lütfen bekleyiniz...")
+    # Örnek Tarama Sonuçları (Gerçek veriye bağlandığında burası dolacak)
+    results = {
+        "Sembol": ["BTCUSDT", "ETHUSDT", "SOLUSDT", "AVAXUSDT"],
+        "Sinyal": ["AL", "GÜÇLÜ AL", "BEKLE", "AL"],
+        "RSI": [32, 28, 45, 35],
+        "Fiyat": ["52,400", "2,850", "110.5", "38.2"]
+    }
+    df = pd.DataFrame(results)
     
-    # Örnek bir veri tablosu (Görmen için ekledim)
-    st.write("Sonuçlar:")
-    st.dataframe({"Sembol": [sembol], "Durum": ["Analiz Edildi"], "Sinyal": ["Beklemede"]})
-
+    st.markdown("### 📊 Tarama Sonuçları")
+    st.dataframe(df, use_container_width=True)
+    
+    st.balloons() # Tarama bittiğinde görsel efekt
 else:
-    st.warning("Henüz bir tarama başlatılmadı. Lütfen yukarıdan seçim yapın.")
+    st.warning("Henüz tarama yapılmadı. Yukarıdaki butona basarak başlayabilirsin.")
+
+st.markdown("---")
+st.caption("Pusu (Ambush) v1.0 - Yiğit için özel geliştirilmiştir.")
