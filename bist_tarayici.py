@@ -393,7 +393,7 @@ else:
 
 
 
-**`requirements.txt` içeriği:**
+**requirements.txt içeriği:**
 ```
 streamlit==1.32.2
 yfinance
