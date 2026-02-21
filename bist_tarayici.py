@@ -149,7 +149,7 @@ def scan_ticker(ticker, interval, days_back, strategies, trend_period, son_n):
         c = float(df["Close"].iloc[i])
         signals = []
 
-        if "Çekiç" in strategies:
+        if "Cekic" in strategies:
             if check_hammer(o, h, l, c) and is_downtrend(closes, i, trend_period):
                 signals.append("Çekiç")
 
@@ -159,7 +159,7 @@ def scan_ticker(ticker, interval, days_back, strategies, trend_period, son_n):
             if check_engulfing(o1, c1, o, c) and is_downtrend(closes, i, trend_period):
                 signals.append("Yutan")
 
-        if "Sabah Yıldızı" in strategies and i >= 2:
+        if "Sabah Yildizi" in strategies and i >= 2:
             rows = [
                 (
                     float(df["Open"].iloc[i - 2 + j]),
@@ -389,15 +389,3 @@ if st.session_state.done:
                 st.metric("EMA 55", row["EMA55"])
 else:
     st.info("Sol panelden periyot ve strateji sec, ardından TARAMAYI BASLAT butonuna bas.")
-
-
-
-
-**requirements.txt içeriği:**
-```
-streamlit==1.32.2
-yfinance
-pandas
-numpy
-plotly
-altair==4.2.2
