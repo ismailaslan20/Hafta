@@ -128,6 +128,54 @@ def check_three_inside_up(r):
 
     return bearish_1 and bullish_2 and bullish_3 and inside and confirm
 
+def calc_rsi(closes, period=14):
+    delta = closes.diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.ewm(com=period - 1, min_periods=period).mean()
+    avg_loss = loss.ewm(com=period - 1, min_periods=period).mean()
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
+
+def check_bullish_divergence(closes, rsi, idx, lookback=20):
+    """
+    Pozitif RSI Uyumsuzluğu:
+    - Fiyat penceredeki en düşük 2 dibi karşılaştırır: son dip < önceki dip (lower low)
+    - RSI aynı noktalarda: son RSI dibi > önceki RSI dibi (higher low)
+    - Bu iki koşul aynı anda gerçekleşirse uyumsuzluk var demektir
+    """
+    if idx < lookback + 1:
+        return False
+
+    # Penceredeki fiyat ve RSI dizileri (son mum hariç, lookback kadar geriye)
+    window_closes = closes.iloc[idx - lookback: idx + 1]
+    window_rsi    = rsi.iloc[idx - lookback: idx + 1]
+
+    if window_rsi.isna().any():
+        return False
+
+    current_low  = float(closes.iloc[idx])
+    current_rsi  = float(rsi.iloc[idx])
+
+    # Penceredeki son mum hariç en düşük fiyat noktasını bul
+    prev_window_closes = window_closes.iloc[:-1]
+    prev_low_idx = int(prev_window_closes.idxmin().item()) if hasattr(prev_window_closes.idxmin(), 'item') else int(prev_window_closes.idxmin())
+
+    # idx ile aynı pozisyona denk gelmesin
+    if prev_low_idx == idx:
+        return False
+
+    prev_low = float(closes.iloc[prev_low_idx])
+    prev_rsi = float(rsi.iloc[prev_low_idx])
+
+    # Fiyat daha düşük dip + RSI daha yüksek dip = pozitif uyumsuzluk
+    price_lower_low  = current_low  < prev_low
+    rsi_higher_low   = current_rsi  > prev_rsi
+    # RSI aşırı satım bölgesinde olması sinyal kalitesini artırır (opsiyonel ama standart)
+    rsi_oversold     = current_rsi < 50
+
+    return price_lower_low and rsi_higher_low and rsi_oversold
+
 def check_ema(emas, idx):
     try:
         e5  = float(emas[5].iloc[idx])
@@ -164,6 +212,7 @@ def scan_ticker(ticker, interval, days_back, strategies, trend_period, son_n):
 
     closes = df["Close"].squeeze()
     emas = calc_emas(closes)
+    rsi  = calc_rsi(closes)
     n = len(df)
     results = []
 
@@ -210,6 +259,10 @@ def scan_ticker(ticker, interval, days_back, strategies, trend_period, son_n):
             if check_three_inside_up(rows3) and is_downtrend(closes, i, trend_period):
                 signals.append("Three Inside Up")
 
+        if "RSI Uyumsuzlugu" in strategies:
+            if check_bullish_divergence(closes, rsi, i):
+                signals.append("Pozitif RSI Uyumsuzluğu")
+
         if "EMA Dizilimi" in strategies:
             bull, cross = check_ema(emas, i)
             if bull:
@@ -225,6 +278,7 @@ def scan_ticker(ticker, interval, days_back, strategies, trend_period, son_n):
                 "Tarih":   df.index[i].strftime("%Y-%m-%d"),
                 "Sinyal":  " | ".join(signals),
                 "Kapanis": round(c, 2),
+                "RSI14":   round(float(rsi.iloc[i]), 1),
                 "EMA5":    e[5],
                 "EMA14":   e[14],
                 "EMA34":   e[34],
@@ -250,8 +304,16 @@ def draw_chart(ticker, interval, days_back, signal_dates):
 
     closes = df["Close"].squeeze()
     emas = calc_emas(closes)
+    rsi  = calc_rsi(closes)
 
-    fig = go.Figure()
+    from plotly.subplots import make_subplots
+    fig = make_subplots(
+        rows=2, cols=1,
+        shared_xaxes=True,
+        row_heights=[0.7, 0.3],
+        vertical_spacing=0.05,
+    )
+
     fig.add_trace(go.Candlestick(
         x=df.index,
         open=df["Open"].squeeze(),
@@ -263,7 +325,7 @@ def draw_chart(ticker, interval, days_back, signal_dates):
         decreasing_line_color="#ff6b6b",
         increasing_fillcolor="#00d4aa",
         decreasing_fillcolor="#ff6b6b",
-    ))
+    ), row=1, col=1)
 
     colors = {5: "#ffd166", 14: "#0099ff", 34: "#ff6b6b", 55: "#cc88ff"}
     for p, col in colors.items():
@@ -271,7 +333,7 @@ def draw_chart(ticker, interval, days_back, signal_dates):
             x=df.index, y=emas[p],
             name="EMA" + str(p),
             line=dict(color=col, width=1.5)
-        ))
+        ), row=1, col=1)
 
     for sd in signal_dates:
         try:
@@ -283,19 +345,33 @@ def draw_chart(ticker, interval, days_back, signal_dates):
                 text="▲",
                 font=dict(color="#ffd166", size=18),
                 showarrow=False,
+                row=1, col=1,
             )
         except Exception:
             pass
+
+    # RSI çizgisi
+    fig.add_trace(go.Scatter(
+        x=df.index, y=rsi,
+        name="RSI 14",
+        line=dict(color="#a78bfa", width=1.5),
+    ), row=2, col=1)
+
+    # RSI 30 ve 70 seviyeleri
+    fig.add_hline(y=70, line=dict(color="#ff6b6b", width=1, dash="dash"), row=2, col=1)
+    fig.add_hline(y=30, line=dict(color="#00d4aa", width=1, dash="dash"), row=2, col=1)
 
     fig.update_layout(
         paper_bgcolor="#0a0e1a",
         plot_bgcolor="#111827",
         font=dict(color="#e2e8f0"),
         xaxis=dict(gridcolor="#1e2d40", rangeslider=dict(visible=False)),
+        xaxis2=dict(gridcolor="#1e2d40"),
         yaxis=dict(gridcolor="#1e2d40"),
+        yaxis2=dict(gridcolor="#1e2d40", range=[0, 100]),
         legend=dict(bgcolor="#111827", bordercolor="#1e2d40", borderwidth=1),
         margin=dict(l=10, r=10, t=30, b=10),
-        height=500,
+        height=600,
     )
     st.plotly_chart(fig, use_container_width=True)
 
@@ -310,7 +386,7 @@ with st.sidebar:
     st.markdown("---")
     strategies = st.multiselect(
         "Stratejiler",
-        ["Cekic", "Yutan", "Sabah Yildizi", "Three Inside Up", "EMA Dizilimi"],
+        ["Cekic", "Yutan", "Sabah Yildizi", "Three Inside Up", "RSI Uyumsuzlugu", "EMA Dizilimi"],
         default=["Cekic", "EMA Dizilimi"],
     )
     hisse_sec = st.multiselect(
@@ -394,7 +470,7 @@ if st.session_state.done:
 
         st.markdown("### Sonuclar: " + str(len(df_show)) + " sinyal")
         st.dataframe(
-            df_show[["Hisse", "Tarih", "Sinyal", "Kapanis", "EMA5", "EMA14", "EMA34", "EMA55", "Zaman"]],
+            df_show[["Hisse", "Tarih", "Sinyal", "Kapanis", "RSI14", "EMA5", "EMA14", "EMA34", "EMA55", "Zaman"]],
             use_container_width=True,
             hide_index=True,
         )
