@@ -292,10 +292,10 @@ def scan_ticker(ticker, interval, days_back, strategies, trend_period, son_n):
     return results
 
 def draw_chart(ticker, interval, days_back, signal_dates):
-    end = datetime.today()
-    start = end - timedelta(days=days_back)
+    end_dt = datetime.today()
+    start_dt = end_dt - timedelta(days=days_back)
     df = yf.download(
-        ticker, start=start, end=end,
+        ticker, start=start_dt, end=end_dt,
         interval=interval, progress=False, auto_adjust=True
     )
     if df is None or df.empty:
@@ -304,45 +304,56 @@ def draw_chart(ticker, interval, days_back, signal_dates):
         df.columns = df.columns.get_level_values(0)
 
     closes = df["Close"].squeeze()
-    emas = calc_emas(closes)
-    rsi  = calc_rsi(closes)
+    emas   = calc_emas(closes)
+    rsi    = calc_rsi(closes)
 
+    # ── ÜST PANEL: Mum grafik + EMA ──────────────────────────────────────────
     from plotly.subplots import make_subplots
     fig = make_subplots(
         rows=2, cols=1,
         shared_xaxes=True,
-        row_heights=[0.7, 0.3],
-        vertical_spacing=0.05,
+        row_heights=[0.68, 0.32],
+        vertical_spacing=0.03,
     )
 
-    fig.add_trace(go.Candlestick(
-        x=df.index,
-        open=df["Open"].squeeze(),
-        high=df["High"].squeeze(),
-        low=df["Low"].squeeze(),
-        close=closes,
-        name=ticker,
-        increasing_line_color="#00d4aa",
-        decreasing_line_color="#ff6b6b",
-        increasing_fillcolor="#00d4aa",
-        decreasing_fillcolor="#ff6b6b",
-    ), row=1, col=1)
+    # Mum grafiği
+    fig.add_trace(
+        go.Candlestick(
+            x=list(range(len(df))),          # integer index → boşluk yok
+            open=df["Open"].squeeze().tolist(),
+            high=df["High"].squeeze().tolist(),
+            low=df["Low"].squeeze().tolist(),
+            close=closes.tolist(),
+            name=ticker,
+            increasing_line_color="#00d4aa",
+            decreasing_line_color="#ff6b6b",
+            increasing_fillcolor="#00d4aa",
+            decreasing_fillcolor="#ff6b6b",
+        ),
+        row=1, col=1,
+    )
 
+    # EMA çizgileri
     colors = {5: "#ffd166", 14: "#0099ff", 34: "#ff6b6b", 55: "#cc88ff"}
     for p, col in colors.items():
-        fig.add_trace(go.Scatter(
-            x=df.index, y=emas[p],
-            name="EMA" + str(p),
-            line=dict(color=col, width=1.5)
-        ), row=1, col=1)
+        fig.add_trace(
+            go.Scatter(
+                x=list(range(len(df))),
+                y=emas[p].tolist(),
+                name="EMA" + str(p),
+                line=dict(color=col, width=1.5),
+            ),
+            row=1, col=1,
+        )
 
+    # Sinyal okları
     for sd in signal_dates:
         try:
-            ts = pd.Timestamp(sd)
-            row = df.loc[ts]
+            ts  = pd.Timestamp(sd)
+            pos = df.index.get_loc(ts)
+            low_val = float(df["Low"].iloc[pos]) * 0.98
             fig.add_annotation(
-                x=ts,
-                y=float(row["Low"].squeeze()) * 0.98,
+                x=pos, y=low_val,
                 text="▲",
                 font=dict(color="#ffd166", size=18),
                 showarrow=False,
@@ -351,16 +362,23 @@ def draw_chart(ticker, interval, days_back, signal_dates):
         except Exception:
             pass
 
-    # RSI çizgisi
-    fig.add_trace(go.Scatter(
-        x=df.index, y=rsi,
-        name="RSI 14",
-        line=dict(color="#a78bfa", width=1.5),
-    ), row=2, col=1)
-
-    # RSI 30 ve 70 seviyeleri
+    # ── ALT PANEL: RSI çizgisi ────────────────────────────────────────────────
+    fig.add_trace(
+        go.Scatter(
+            x=list(range(len(df))),
+            y=rsi.tolist(),
+            name="RSI 14",
+            line=dict(color="#a78bfa", width=1.5),
+        ),
+        row=2, col=1,
+    )
     fig.add_hline(y=70, line=dict(color="#ff6b6b", width=1, dash="dash"), row=2, col=1)
     fig.add_hline(y=30, line=dict(color="#00d4aa", width=1, dash="dash"), row=2, col=1)
+
+    # X eksen etiketleri: her 10 mumda bir tarih göster
+    step   = max(1, len(df) // 10)
+    tvals  = list(range(0, len(df), step))
+    tlabels = [df.index[i].strftime("%Y-%m-%d") for i in tvals]
 
     fig.update_layout(
         paper_bgcolor="#0a0e1a",
@@ -368,22 +386,22 @@ def draw_chart(ticker, interval, days_back, signal_dates):
         font=dict(color="#e2e8f0"),
         xaxis=dict(
             gridcolor="#1e2d40",
+            tickmode="array",
+            tickvals=tvals,
+            ticktext=tlabels,
             rangeslider=dict(visible=False),
-            rangebreaks=[
-                dict(bounds=["sat", "mon"]),  # hafta sonlarını gizle
-            ],
         ),
         xaxis2=dict(
             gridcolor="#1e2d40",
-            rangebreaks=[
-                dict(bounds=["sat", "mon"]),
-            ],
+            tickmode="array",
+            tickvals=tvals,
+            ticktext=tlabels,
         ),
         yaxis=dict(gridcolor="#1e2d40"),
         yaxis2=dict(gridcolor="#1e2d40", range=[0, 100]),
         legend=dict(bgcolor="#111827", bordercolor="#1e2d40", borderwidth=1),
         margin=dict(l=10, r=10, t=30, b=10),
-        height=600,
+        height=620,
     )
     st.plotly_chart(fig, use_container_width=True)
 
