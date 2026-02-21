@@ -73,8 +73,9 @@ PERIYOT_MAP = {
     "Aylık":    ("1mo", 1460),
 }
 
-def calc_emas(closes):
-    return {p: closes.ewm(span=p, adjust=False).mean() for p in [5, 14, 34, 55]}
+def calc_emas(closes, n=None):
+    # Mum sayısı azsa EMA periyotları kendiliğinden kısalır (ewm min_periods=1)
+    return {p: closes.ewm(span=p, adjust=False, min_periods=1).mean() for p in [5, 14, 34, 55]}
 
 def is_downtrend(closes, idx, period):
     if idx < period:
@@ -132,9 +133,9 @@ def calc_rsi(closes, period=14):
     delta = closes.diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
-    avg_gain = gain.ewm(com=period - 1, min_periods=period).mean()
-    avg_loss = loss.ewm(com=period - 1, min_periods=period).mean()
-    rs = avg_gain / avg_loss
+    avg_gain = gain.ewm(com=period - 1, min_periods=1).mean()
+    avg_loss = loss.ewm(com=period - 1, min_periods=1).mean()
+    rs = avg_gain / avg_loss.replace(0, np.nan)
     return 100 - (100 / (1 + rs))
 
 def check_bullish_divergence(closes, rsi, idx, lookback=20):
@@ -226,7 +227,12 @@ def scan_ticker(ticker, interval, days_back, strategies, trend_period, son_n):
         )
     except Exception:
         return []
-    if df is None or df.empty or len(df) < 60:
+
+    # Periyota göre dinamik minimum mum eşiği
+    min_bars = {"1d": 60, "1wk": 30, "1mo": 12}
+    min_required = min_bars.get(interval, 30)
+
+    if df is None or df.empty or len(df) < min_required:
         return []
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
@@ -239,7 +245,10 @@ def scan_ticker(ticker, interval, days_back, strategies, trend_period, son_n):
     n = len(df)
     results = []
 
-    for i in range(max(55, trend_period, n - son_n), n):
+    # EMA55 için yeterli mum yoksa EMA periyodunu mum sayısına göre sınırla
+    min_ema_warmup = min(55, n - son_n - 1)
+
+    for i in range(max(min_ema_warmup, trend_period, n - son_n), n):
         o = float(df["Open"].iloc[i])
         h = float(df["High"].iloc[i])
         l = float(df["Low"].iloc[i])
