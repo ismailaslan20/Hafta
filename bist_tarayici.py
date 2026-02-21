@@ -103,6 +103,31 @@ def check_morning_star(r):
         and r[2][3] > (r[0][0] + r[0][3]) / 2
     )
 
+def check_three_inside_up(r):
+    """
+    Three Inside Up:
+    1. Mum: Büyük bearish (düşüş) mumu
+    2. Mum: 1. mumun gövdesi içinde kalan küçük bullish mumu (harami)
+    3. Mum: 1. mumun kapanışının üzerinde kapanan bullish mumu
+    """
+    if len(r) < 3:
+        return False
+    o1, h1, l1, c1 = r[0]  # Büyük bearish mum
+    o2, h2, l2, c2 = r[1]  # Küçük bullish mum (harami)
+    o3, h3, l3, c3 = r[2]  # Onaylayıcı bullish mum
+
+    bearish_1 = c1 < o1
+    bullish_2 = c2 > o2
+    bullish_3 = c3 > o3
+
+    # 2. mum 1. mumun gövdesi içinde kalmalı (harami)
+    inside = o2 >= c1 and c2 <= o1
+
+    # 3. mum 1. mumun açılışının üzerinde kapanmalı
+    confirm = c3 > o1
+
+    return bearish_1 and bullish_2 and bullish_3 and inside and confirm
+
 def check_ema(emas, idx):
     try:
         e5  = float(emas[5].iloc[idx])
@@ -171,6 +196,19 @@ def scan_ticker(ticker, interval, days_back, strategies, trend_period, son_n):
             ]
             if check_morning_star(rows):
                 signals.append("Sabah Yıldızı")
+
+        if "Three Inside Up" in strategies and i >= 2:
+            rows3 = [
+                (
+                    float(df["Open"].iloc[i - 2 + j]),
+                    float(df["High"].iloc[i - 2 + j]),
+                    float(df["Low"].iloc[i - 2 + j]),
+                    float(df["Close"].iloc[i - 2 + j]),
+                )
+                for j in range(3)
+            ]
+            if check_three_inside_up(rows3) and is_downtrend(closes, i, trend_period):
+                signals.append("Three Inside Up")
 
         if "EMA Dizilimi" in strategies:
             bull, cross = check_ema(emas, i)
@@ -272,7 +310,7 @@ with st.sidebar:
     st.markdown("---")
     strategies = st.multiselect(
         "Stratejiler",
-        ["Cekic", "Yutan", "Sabah Yildizi", "EMA Dizilimi"],
+        ["Cekic", "Yutan", "Sabah Yildizi", "Three Inside Up", "EMA Dizilimi"],
         default=["Cekic", "EMA Dizilimi"],
     )
     hisse_sec = st.multiselect(
