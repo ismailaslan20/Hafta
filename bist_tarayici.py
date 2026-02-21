@@ -178,21 +178,43 @@ def check_bullish_divergence(closes, rsi, idx, lookback=20):
     return price_lower_low and rsi_higher_low and rsi_oversold
 
 def check_ema(emas, idx):
+    """
+    3 farklı EMA sinyali döndürür:
+    - bull:          Tam dizilim (EMA5>14>34>55) — trend onayı
+    - cross:         EMA5, EMA14'ü bu mumda yukarı kesti — kesişim anı
+    - pre_cross:     Henüz kesmedi ama EMA5 eğimi pozitife döndü
+                     ve EMA14'e %1.5'ten az kaldı — erken uyarı
+    """
     try:
-        e5  = float(emas[5].iloc[idx])
-        e14 = float(emas[14].iloc[idx])
-        e34 = float(emas[34].iloc[idx])
-        e55 = float(emas[55].iloc[idx])
-        bull = e5 > e14 > e34 > e55
-        cross = False
-        if idx >= 2:
-            cross = (
-                float(emas[5].iloc[idx - 1]) < float(emas[14].iloc[idx - 1])
-                and e5 > e14
-            )
-        return bull, cross
+        e5      = float(emas[5].iloc[idx])
+        e14     = float(emas[14].iloc[idx])
+        e34     = float(emas[34].iloc[idx])
+        e55     = float(emas[55].iloc[idx])
+        bull    = e5 > e14 > e34 > e55
+
+        cross     = False
+        pre_cross = False
+
+        if idx >= 3:
+            e5_prev1  = float(emas[5].iloc[idx - 1])
+            e5_prev2  = float(emas[5].iloc[idx - 2])
+            e14_prev1 = float(emas[14].iloc[idx - 1])
+
+            # Tam kesişim: önceki mumda EMA5 < EMA14, bu mumda EMA5 > EMA14
+            cross = e5_prev1 < e14_prev1 and e5 > e14
+
+            # Erken uyarı: henüz kesmedi ama
+            #   1) EMA5 son 2 mumda yükseliyor (eğim pozitif)
+            #   2) EMA5 hâlâ EMA14 altında
+            #   3) Aradaki fark EMA14'ün %1.5'inden az (yaklaşıyor)
+            ema5_rising = e5 > e5_prev1 > e5_prev2
+            still_below = e5 < e14
+            gap_pct     = (e14 - e5) / e14 * 100
+            pre_cross   = ema5_rising and still_below and gap_pct < 1.5
+
+        return bull, cross, pre_cross
     except Exception:
-        return False, False
+        return False, False, False
 
 def scan_ticker(ticker, interval, days_back, strategies, trend_period, son_n):
     end = datetime.today()
@@ -265,11 +287,13 @@ def scan_ticker(ticker, interval, days_back, strategies, trend_period, son_n):
                 signals.append("Pozitif RSI Uyumsuzluğu")
 
         if "EMA Dizilimi" in strategies:
-            bull, cross = check_ema(emas, i)
+            bull, cross, pre_cross = check_ema(emas, i)
             if bull:
                 signals.append("EMA Dizilim")
             if cross:
                 signals.append("EMA Kesisim")
+            if pre_cross:
+                signals.append("EMA Yaklasim")
 
         if signals:
             e = {p: round(float(emas[p].iloc[i]), 2) for p in [5, 14, 34, 55]}
