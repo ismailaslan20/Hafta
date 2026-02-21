@@ -159,14 +159,15 @@ def check_bullish_divergence(closes, rsi, idx, lookback=20):
 
     # Penceredeki son mum hariç en düşük fiyat noktasını bul
     prev_window_closes = window_closes.iloc[:-1]
-    prev_low_idx = int(prev_window_closes.idxmin().item()) if hasattr(prev_window_closes.idxmin(), 'item') else int(prev_window_closes.idxmin())
+    prev_low_label = prev_window_closes.idxmin()  # datetime label
+    prev_low_pos   = closes.index.get_loc(prev_low_label)  # integer position
 
     # idx ile aynı pozisyona denk gelmesin
-    if prev_low_idx == idx:
+    if prev_low_pos == idx:
         return False
 
-    prev_low = float(closes.iloc[prev_low_idx])
-    prev_rsi = float(rsi.iloc[prev_low_idx])
+    prev_low = float(closes.iloc[prev_low_pos])
+    prev_rsi = float(rsi.iloc[prev_low_pos])
 
     # Fiyat daha düşük dip + RSI daha yüksek dip = pozitif uyumsuzluk
     price_lower_low  = current_low  < prev_low
