@@ -366,15 +366,25 @@ def draw_chart(ticker, interval, days_back, signal_dates):
         paper_bgcolor="#0a0e1a",
         plot_bgcolor="#111827",
         font=dict(color="#e2e8f0"),
-        xaxis=dict(gridcolor="#1e2d40", rangeslider=dict(visible=False), type="category"),
-        xaxis2=dict(gridcolor="#1e2d40", type="category"),
+        xaxis=dict(
+            gridcolor="#1e2d40",
+            rangeslider=dict(visible=False),
+            rangebreaks=[
+                dict(bounds=["sat", "mon"]),  # hafta sonlarını gizle
+            ],
+        ),
+        xaxis2=dict(
+            gridcolor="#1e2d40",
+            rangebreaks=[
+                dict(bounds=["sat", "mon"]),
+            ],
+        ),
         yaxis=dict(gridcolor="#1e2d40"),
         yaxis2=dict(gridcolor="#1e2d40", range=[0, 100]),
         legend=dict(bgcolor="#111827", bordercolor="#1e2d40", borderwidth=1),
         margin=dict(l=10, r=10, t=30, b=10),
         height=600,
     )
-    fig.update_xaxes(rangeslider_visible=False)
     st.plotly_chart(fig, use_container_width=True)
 
 
