@@ -262,22 +262,36 @@ def check_bollinger_rsi(closes, rsi, idx, window=20, num_std=2.0):
 def check_ema_squeeze_volume(df, closes, emas, idx, vol_mult=1.5):
     """
     EMA Sıkışma + Hacim Patlaması:
+    - Fiyat EMA55'e yakın (EMA55'in %10'undan fazla üzerinde değil) → tepe filtresi
+    - Önceki 5 mumda düşüş trendi var → dip filtresi
     - EMA5 ve EMA34 arasındaki mesafe daralıyor (sıkışma)
-    - Mevcut hacim son 20 mumun ortalamasının vol_mult katından fazla
+    - Hacim son 20 mumun ortalamasının vol_mult katından fazla
     - Kapanış EMA5'in üzerinde (yükseliş yönünde kırılım)
     """
     if idx < 20:
         return False
     try:
-        e5  = float(emas[5].iloc[idx])
-        e34 = float(emas[34].iloc[idx])
+        e5   = float(emas[5].iloc[idx])
+        e34  = float(emas[34].iloc[idx])
+        e55  = float(emas[55].iloc[idx])
         e5_prev  = float(emas[5].iloc[idx - 3])
         e34_prev = float(emas[34].iloc[idx - 3])
 
+        curr_close = float(closes.iloc[idx])
+
+        # Tepe filtresi: fiyat EMA55'in %10'undan fazla üzerinde olmamalı
+        not_too_high = curr_close < e55 * 1.10
+
+        # Dip filtresi: 5 mum önce fiyat şimdiden yüksek olmalı (düşüş trendi gelmiş)
+        prior_close = float(closes.iloc[idx - 5])
+        came_from_above = prior_close > curr_close * 1.02  # en az %2 düşmüş
+
+        # EMA sıkışması
         gap_now  = abs(e5 - e34)
         gap_prev = abs(e5_prev - e34_prev)
-        squeeze  = gap_now < gap_prev * 0.85   # %15 daralma
+        squeeze  = gap_now < gap_prev * 0.85
 
+        # Hacim patlaması
         vol_col = "Volume" if "Volume" in df.columns else None
         if vol_col is None:
             return False
@@ -285,10 +299,10 @@ def check_ema_squeeze_volume(df, closes, emas, idx, vol_mult=1.5):
         vol_avg  = float(df[vol_col].iloc[idx - 20:idx].mean())
         vol_break = vol_curr > vol_avg * vol_mult
 
-        curr_close = float(closes.iloc[idx])
+        # Bullish kırılım
         bullish_break = curr_close > e5
 
-        return squeeze and vol_break and bullish_break
+        return not_too_high and came_from_above and squeeze and vol_break and bullish_break
     except Exception:
         return False
 
