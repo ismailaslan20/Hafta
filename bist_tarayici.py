@@ -192,11 +192,11 @@ def check_pusu_crossover(m_n, adx, idx):
     prev_adx = float(adx.iloc[idx - 1])
     curr_adx = float(adx.iloc[idx])
 
-    # 1) Crossover: alttan yukarı kesti
-    crossover = (prev_mn <= prev_adx) and (curr_mn > curr_adx)
-    # 2) MACD_N yukarı dönmüş
+    # 1) Crossover: MACD_N alttan yukarı kesti (öncede altında, şimdi üstünde)
+    crossover = (prev_mn < prev_adx) and (curr_mn > curr_adx)
+    # 2) MACD_N yukarı dönmüş (boynunu kaldırdı)
     macd_yukari = curr_mn > prev_mn
-    # 3) ADX yukarı dönmüş
+    # 3) ADX yukarı dönmüş (boynunu kaldırdı)
     adx_yukari = curr_adx > prev_adx
     return crossover and macd_yukari and adx_yukari
 
