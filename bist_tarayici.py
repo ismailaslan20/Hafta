@@ -140,6 +140,7 @@ def calc_pusu_indicators(closes, df, macd_fast=12, macd_slow=26, macd_sig=9, adx
     macd_line = ema_fast - ema_slow
 
     # MACD'yi normalize et (0-100 arası) - Pine kodundaki m_n
+    # min_periods=1 sayesinde az barda da çalışır
     macd_lowest  = macd_line.rolling(norm_period, min_periods=1).min()
     macd_highest = macd_line.rolling(norm_period, min_periods=1).max()
     denom = (macd_highest - macd_lowest).replace(0, np.nan)
@@ -181,6 +182,7 @@ def check_pusu_crossover(m_n, adx, idx):
     """
     Pine: ta.crossover(m_n, adx_v)
     Yani: bir önceki barda m_n <= adx, bu barda m_n > adx
+    ADX seviye şartı YOK - saf kesişim yeterli
     """
     if idx < 1:
         return False
@@ -189,6 +191,7 @@ def check_pusu_crossover(m_n, adx, idx):
     prev_adx = float(adx.iloc[idx - 1])
     curr_adx = float(adx.iloc[idx])
 
+    # Saf crossover: önceki barda altında, bu barda üstünde
     crossover = (prev_mn <= prev_adx) and (curr_mn > curr_adx)
     return crossover
 
