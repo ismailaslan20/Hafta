@@ -180,20 +180,25 @@ def calc_pusu_indicators(closes, df, macd_fast=12, macd_slow=26, macd_sig=9, adx
 
 def check_pusu_crossover(m_n, adx, idx):
     """
-    Pine: ta.crossover(m_n, adx_v)
-    Yani: bir önceki barda m_n <= adx, bu barda m_n > adx
-    ADX seviye şartı YOK - saf kesişim yeterli
+    Koşullar:
+    1) MACD_N, ADX'i alttan yukarı kesmeli (crossover)
+    2) MACD_N yukarı dönmeli (curr > prev) - boynunu kaldırıyor
+    3) ADX yukarı dönmeli (curr > prev) - boynunu kaldırıyor
     """
-    if idx < 1:
+    if idx < 2:
         return False
     prev_mn  = float(m_n.iloc[idx - 1])
     curr_mn  = float(m_n.iloc[idx])
     prev_adx = float(adx.iloc[idx - 1])
     curr_adx = float(adx.iloc[idx])
 
-    # Saf crossover: önceki barda altında, bu barda üstünde
+    # 1) Crossover: alttan yukarı kesti
     crossover = (prev_mn <= prev_adx) and (curr_mn > curr_adx)
-    return crossover
+    # 2) MACD_N yukarı dönmüş
+    macd_yukari = curr_mn > prev_mn
+    # 3) ADX yukarı dönmüş
+    adx_yukari = curr_adx > prev_adx
+    return crossover and macd_yukari and adx_yukari
 
 
 def check_bullish_divergence(closes, rsi, idx, lookback=20):
