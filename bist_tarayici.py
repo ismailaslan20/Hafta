@@ -163,39 +163,38 @@ def check_bullish_divergence(closes, rsi, idx, lookback=60, left=3, right=0):
     - right=0: Son mumun kendisi pivot olabilir (sağ taraf beklenmez)
     - Penceredeki son 2 gerçek pivot karşılaştırılır
     - Fiyat lower low + RSI higher low = pozitif uyumsuzluk
+    Her zaman (bool, info_or_None) tuple döndürür.
     """
     if idx < left + 4:
-        return False
+        return False, None
 
     win_start = max(0, idx - lookback)
     window_closes = closes.iloc[win_start: idx + 1]
     window_rsi    = rsi.iloc[win_start: idx + 1]
 
     if window_rsi.isna().sum() > len(window_rsi) * 0.3:
-        return False
+        return False, None
 
     local_pivots = find_pivot_lows(window_closes, left=left, right=0)
 
     if len(local_pivots) < 2:
-        return False
+        return False, None
 
-    p2_local = local_pivots[-1]   # en yeni pivot
-    p1_local = local_pivots[-2]   # bir önceki pivot
+    p2_local = local_pivots[-1]
+    p1_local = local_pivots[-2]
 
-    # En yeni pivot son 5 mum içinde olsun (çok eski sinyalleri eleriz)
     if len(window_closes) - 1 - p2_local > 5:
-        return False
+        return False, None
 
-    # İki pivot arasında en az 5 mum olsun (aynı dip değil)
     if p2_local - p1_local < 5:
-        return False
+        return False, None
 
     base = win_start
     p2 = base + p2_local
     p1 = base + p1_local
 
     if p2 >= len(closes) or p1 >= len(closes):
-        return False
+        return False, None
 
     price_p1 = float(closes.iloc[p1])
     price_p2 = float(closes.iloc[p2])
@@ -203,7 +202,7 @@ def check_bullish_divergence(closes, rsi, idx, lookback=60, left=3, right=0):
     rsi_p2   = float(rsi.iloc[p2])
 
     if np.isnan(rsi_p1) or np.isnan(rsi_p2):
-        return False
+        return False, None
 
     price_lower_low    = price_p2 < price_p1
     rsi_higher_low     = rsi_p2   > rsi_p1
