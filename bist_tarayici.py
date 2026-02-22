@@ -219,15 +219,38 @@ def check_bullish_divergence(closes, rsi, idx, lookback=60, left=3):
 # ─── BOLLINGER + EMA FORMASYON ───────────────────────────────────────────────
 
 def check_bollinger_rsi(closes, rsi, idx, window=20, num_std=2.0):
-    if idx < window + 2:
+    """
+    Bollinger Alt Band + RSI Dönüşü:
+    - Fiyat alt bandın %3 içinde (veya altında) → aşırı satım bölgesi
+    - RSI 45 altında (zayıf bölge)
+    - RSI son 3 mumda en az birinde daha düşüktü (yukarı dönüş başlıyor)
+    - Kapanış, son 3 mumun en düşük kapanışından yüksek (dip dönüşü)
+    """
+    if idx < window + 3:
         return False
     try:
         pw         = closes.iloc[idx - window: idx + 1]
-        lower_band = float(pw.mean()) - num_std * float(pw.std())
+        ma         = float(pw.mean())
+        std        = float(pw.std())
+        lower_band = ma - num_std * std
         curr_close = float(closes.iloc[idx])
         curr_rsi   = float(rsi.iloc[idx])
-        prev_rsi   = float(rsi.iloc[idx - 3]) if idx >= 3 else curr_rsi
-        return curr_close <= lower_band * 1.01 and curr_rsi < 50 and curr_rsi > prev_rsi
+
+        # Alt banda %3 toleransla yakın mı?
+        near_band = curr_close <= lower_band * 1.03
+
+        # RSI 45 altında
+        rsi_weak = curr_rsi < 45
+
+        # RSI son 3 mumun en düşüğünden yüksek (dönüş başlıyor)
+        rsi_min_3 = min(float(rsi.iloc[idx-1]), float(rsi.iloc[idx-2]), float(rsi.iloc[idx-3]))
+        rsi_turning = curr_rsi > rsi_min_3
+
+        # Fiyat son 3 mumun en düşük kapanışından yüksek
+        c_min_3 = min(float(closes.iloc[idx-1]), float(closes.iloc[idx-2]), float(closes.iloc[idx-3]))
+        price_turning = curr_close > c_min_3
+
+        return near_band and rsi_weak and rsi_turning and price_turning
     except Exception:
         return False
 
@@ -236,22 +259,28 @@ def check_ema_squeeze_volume(df, closes, emas, idx, vol_mult=1.5):
         return False
     try:
         e5       = float(emas[5].iloc[idx])
+        e5_prev  = float(emas[5].iloc[idx - 1])
         e34      = float(emas[34].iloc[idx])
         e55      = float(emas[55].iloc[idx])
-        e5_p     = float(emas[5].iloc[idx - 3])
-        e34_p    = float(emas[34].iloc[idx - 3])
+        e5_p3    = float(emas[5].iloc[idx - 3])
+        e34_p3   = float(emas[34].iloc[idx - 3])
         c_curr   = float(closes.iloc[idx])
+        c_prev   = float(closes.iloc[idx - 1])
         c_5ago   = float(closes.iloc[idx - 5])
 
+        # Tepe filtresi: EMA55'in %10 üzerinde değil
         not_too_high    = c_curr < e55 * 1.10
+        # Dip filtresi: 5 mum önce daha yüksekteydi
         came_from_above = c_5ago > c_curr * 1.02
-        squeeze         = abs(e5 - e34) < abs(e5_p - e34_p) * 0.85
-        bullish_break   = c_curr > e5
+        # EMA sıkışması: mesafe daralıyor
+        squeeze         = abs(e5 - e34) < abs(e5_p3 - e34_p3) * 0.85
+        # Yükseliş kırılımı: önceki mum EMA5 altındaydı, bu mum üstünde kapandı
+        bullish_break   = c_prev < e5_prev and c_curr > e5
 
         if "Volume" not in df.columns:
             return False
-        vol_curr = float(df["Volume"].iloc[idx])
-        vol_avg  = float(df["Volume"].iloc[idx - 20:idx].mean())
+        vol_curr  = float(df["Volume"].iloc[idx])
+        vol_avg   = float(df["Volume"].iloc[idx - 20:idx].mean())
         vol_break = vol_curr > vol_avg * vol_mult
 
         return not_too_high and came_from_above and squeeze and vol_break and bullish_break
