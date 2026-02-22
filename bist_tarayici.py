@@ -175,7 +175,14 @@ def calc_pusu_indicators(closes, df, macd_fast=12, macd_slow=26, macd_sig=9, adx
     dx  = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan)
     adx = dx.ewm(alpha=1/adx_len, min_periods=1, adjust=False).mean()
 
-    return m_n, adx, plus_di, minus_di
+    # ADX de 0-100 normalize et - m_n ile ayni olcekte bulusun
+    adx_lowest  = adx.rolling(norm_period, min_periods=1).min()
+    adx_highest = adx.rolling(norm_period, min_periods=1).max()
+    adx_denom   = (adx_highest - adx_lowest).replace(0, np.nan)
+    adx_n       = 100 * (adx - adx_lowest) / adx_denom
+    adx_n       = adx_n.fillna(50)
+
+    return m_n, adx_n, plus_di, minus_di
 
 
 def check_pusu_crossover(m_n, adx, idx):
