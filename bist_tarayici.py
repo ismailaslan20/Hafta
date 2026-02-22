@@ -74,7 +74,7 @@ PERIYOT_MAP = {
 }
 
 def calc_emas(closes, n=None):
-    return {p: closes.ewm(span=p, adjust=False, min_periods=1).mean() for p in [5, 14, 34, 55]}
+    return {p: closes.ewm(span=p, adjust=False, min_periods=1).mean() for p in [5, 14, 20, 34, 50, 55, 200]}
 
 def is_downtrend(closes, idx, period):
     if idx < period:
@@ -115,6 +115,25 @@ def check_three_inside_up(r):
     inside = o2 >= c1 and c2 <= o1
     confirm = c3 > o1
     return bearish_1 and bullish_2 and bullish_3 and inside and confirm
+
+def check_golden_cross(emas, closes, idx):
+    if idx < 1:
+        return False
+    try:
+        e20  = float(emas[20].iloc[idx])
+        e50  = float(emas[50].iloc[idx])
+        e200 = float(emas[200].iloc[idx])
+        e50_prev  = float(emas[50].iloc[idx - 1])
+        e200_prev = float(emas[200].iloc[idx - 1])
+        c = float(closes.iloc[idx])
+
+        # EMA50 EMA200'ü yukarı kesti
+        cross = (e50_prev < e200_prev) and (e50 > e200)
+        # Fiyat EMA20 üstünde
+        fiyat_ema20_ustu = c > e20
+        return cross and fiyat_ema20_ustu
+    except Exception:
+        return False
 
 def calc_rsi(closes, period=14):
     delta = closes.diff()
@@ -337,6 +356,12 @@ def scan_ticker(ticker, interval, days_back, strategies, trend_period, son_n):
                 signals.append("EMA Kesisim")
             if pre_cross:
                 signals.append("EMA Yaklasim")
+
+        # ── Golden Cross: EMA50 EMA200'ü yukarı kesiyor, fiyat EMA20 üstünde ──
+        if "Golden Cross" in strategies:
+            if check_golden_cross(emas, closes, i):
+                signals.append("Golden Cross [EMA50>EMA200 & Fiyat>EMA20]")
+        # ────────────────────────────────────────────────────────────────────
 
         # ── PusuV9: Normalize MACD, ADX'i yukarı kestiğinde sinyal ──────────
         if "PusuV9" in strategies and m_n is not None:
@@ -569,7 +594,7 @@ with st.sidebar:
     strategies = st.multiselect(
         "Stratejiler",
         ["Cekic", "Yutan", "Sabah Yildizi", "Three Inside Up",
-         "RSI Uyumsuzlugu", "EMA Dizilimi", "PusuV9"],
+         "RSI Uyumsuzlugu", "EMA Dizilimi", "PusuV9", "Golden Cross"],
         default=["PusuV9"],
     )
     hisse_sec = st.multiselect(
