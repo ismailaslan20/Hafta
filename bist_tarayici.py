@@ -215,6 +215,110 @@ def check_bullish_divergence(closes, rsi, idx, lookback=60, left=3, right=0):
     return False, None
 
 
+
+def check_rsi_bounce(closes, rsi, idx):
+    """
+    RSI 30 Dönüşü + Bullish Mum:
+    - Önceki mumda RSI < 30 (aşırı satım)
+    - Bu mumda RSI > 30 (yukarı döndü)
+    - Bu mum bullish (kapanış > açılış)
+    """
+    if idx < 2:
+        return False
+    try:
+        rsi_prev = float(rsi.iloc[idx - 1])
+        rsi_curr = float(rsi.iloc[idx])
+        o = float(closes.iloc[idx])  # kapanış serisi, open yok ama yaklaşım
+        c_prev = float(closes.iloc[idx - 1])
+        c_curr = float(closes.iloc[idx])
+        bullish_candle = c_curr > c_prev
+        return rsi_prev < 30 and rsi_curr > 30 and bullish_candle
+    except Exception:
+        return False
+
+def check_bollinger_rsi(closes, rsi, idx, window=20, num_std=2.0):
+    """
+    Bollinger Alt Band + RSI Uyumsuzluk:
+    - Fiyat alt Bollinger bandına değiyor veya altında
+    - RSI 50 altında ama önceki dipten yüksek (mini uyumsuzluk)
+    """
+    if idx < window + 2:
+        return False
+    try:
+        price_window = closes.iloc[idx - window: idx + 1]
+        ma   = price_window.mean()
+        std  = price_window.std()
+        lower_band = float(ma) - num_std * float(std)
+        curr_close = float(closes.iloc[idx])
+        curr_rsi   = float(rsi.iloc[idx])
+        prev_rsi   = float(rsi.iloc[idx - 3]) if idx >= 3 else curr_rsi
+
+        touches_band = curr_close <= lower_band * 1.01   # alt banda %1 tolerans
+        rsi_ok       = curr_rsi < 50 and curr_rsi > prev_rsi  # RSI yukarı dönüyor
+        return touches_band and rsi_ok
+    except Exception:
+        return False
+
+def check_ema_squeeze_volume(df, closes, emas, idx, vol_mult=1.5):
+    """
+    EMA Sıkışma + Hacim Patlaması:
+    - EMA5 ve EMA34 arasındaki mesafe daralıyor (sıkışma)
+    - Mevcut hacim son 20 mumun ortalamasının vol_mult katından fazla
+    - Kapanış EMA5'in üzerinde (yükseliş yönünde kırılım)
+    """
+    if idx < 20:
+        return False
+    try:
+        e5  = float(emas[5].iloc[idx])
+        e34 = float(emas[34].iloc[idx])
+        e5_prev  = float(emas[5].iloc[idx - 3])
+        e34_prev = float(emas[34].iloc[idx - 3])
+
+        gap_now  = abs(e5 - e34)
+        gap_prev = abs(e5_prev - e34_prev)
+        squeeze  = gap_now < gap_prev * 0.85   # %15 daralma
+
+        vol_col = "Volume" if "Volume" in df.columns else None
+        if vol_col is None:
+            return False
+        vol_curr = float(df[vol_col].iloc[idx])
+        vol_avg  = float(df[vol_col].iloc[idx - 20:idx].mean())
+        vol_break = vol_curr > vol_avg * vol_mult
+
+        curr_close = float(closes.iloc[idx])
+        bullish_break = curr_close > e5
+
+        return squeeze and vol_break and bullish_break
+    except Exception:
+        return False
+
+def check_inside_bar_breakout(df, idx):
+    """
+    Inside Bar Kırılımı:
+    - Önceki mum: Ana mum (mother bar) — geniş aralıklı
+    - Bu mum: İçeride sıkışmış (inside bar) — öncekinin içinde
+    - Kapanış mother bar'ın yükseğini kırıyor → yukarı kırılım
+    """
+    if idx < 2:
+        return False
+    try:
+        # Mother bar (2 önceki)
+        h_mother = float(df["High"].iloc[idx - 2])
+        l_mother = float(df["Low"].iloc[idx - 2])
+        # Inside bar (1 önceki)
+        h_inside = float(df["High"].iloc[idx - 1])
+        l_inside = float(df["Low"].iloc[idx - 1])
+        # Kırılım mumu (şimdiki)
+        h_curr = float(df["High"].iloc[idx])
+        c_curr = float(df["Close"].iloc[idx])
+        o_curr = float(df["Open"].iloc[idx])
+
+        is_inside = h_inside < h_mother and l_inside > l_mother
+        breakout  = c_curr > h_mother and c_curr > o_curr  # bullish kapanış + kırılım
+        return is_inside and breakout
+    except Exception:
+        return False
+
 def check_ema(emas, idx):
     """
     3 farklı EMA sinyali döndürür:
@@ -340,6 +444,22 @@ def scan_ticker(ticker, interval, days_back, strategies, trend_period, son_n):
             if div_ok:
                 signals.append("Pozitif RSI Uyumsuzluğu")
                 div_pivots = div_info
+
+        if "RSI Donus" in strategies:
+            if check_rsi_bounce(closes, rsi, i):
+                signals.append("RSI 30 Dönüşü")
+
+        if "Bollinger RSI" in strategies:
+            if check_bollinger_rsi(closes, rsi, i):
+                signals.append("Bollinger+RSI")
+
+        if "EMA Hacim" in strategies:
+            if check_ema_squeeze_volume(df, closes, emas, i):
+                signals.append("EMA Sıkışma+Hacim")
+
+        if "Inside Bar" in strategies:
+            if check_inside_bar_breakout(df, i):
+                signals.append("Inside Bar Kırılım")
 
         if "EMA Dizilimi" in strategies:
             bull, cross, pre_cross = check_ema(emas, i)
@@ -524,8 +644,10 @@ with st.sidebar:
     st.markdown("---")
     strategies = st.multiselect(
         "Stratejiler",
-        ["Cekic", "Yutan", "Sabah Yildizi", "Three Inside Up", "RSI Uyumsuzlugu", "EMA Dizilimi"],
-        default=["Cekic", "EMA Dizilimi"],
+        ["Cekic", "Yutan", "Sabah Yildizi", "Three Inside Up",
+         "RSI Uyumsuzlugu", "RSI Donus", "Bollinger RSI", "EMA Hacim", "Inside Bar",
+         "EMA Dizilimi"],
+        default=["RSI Donus", "Bollinger RSI", "EMA Hacim", "Inside Bar"],
     )
     hisse_sec = st.multiselect(
         "Hisse filtresi (bos=tumu):",
