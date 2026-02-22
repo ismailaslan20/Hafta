@@ -564,6 +564,7 @@ with st.sidebar:
 
 st.markdown("# BIST Formasyon Tarayici")
 st.markdown(f"Periyot: {periyot} | Stratejiler: {', '.join(strategies) if strategies else '-'}")
+st.warning("⚠️ Bu uygulama yalnızca teknik analiz amaçlıdır. Yatırım tavsiyesi değildir. Gösterilen sinyaller alım/satım önerisi içermez. Tüm yatırım kararları kullanıcının kendi sorumluluğundadır.")
 st.markdown("---")
 
 if "results" not in st.session_state:
