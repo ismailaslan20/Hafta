@@ -218,39 +218,62 @@ def check_bullish_divergence(closes, rsi, idx, lookback=60, left=3):
 
 # ─── BOLLINGER + EMA FORMASYON ───────────────────────────────────────────────
 
-def check_bollinger_rsi(closes, rsi, idx, window=20, num_std=2.0):
+def calc_bb_width(closes, idx, window=20, num_std=2.0):
+    """Bollinger Bant Genişliği hesaplar (upper-lower / middle)"""
+    if idx < window:
+        return None
+    pw  = closes.iloc[idx - window: idx + 1]
+    ma  = float(pw.mean())
+    std = float(pw.std())
+    if ma == 0:
+        return None
+    return (2 * num_std * std) / ma  # normalize genişlik
+
+def check_bollinger_squeeze_rsi(closes, rsi, idx, window=20, num_std=2.0, squeeze_lookback=10):
     """
-    Bollinger Alt Band + RSI Dönüşü:
-    - Fiyat alt bandın %3 içinde (veya altında) → aşırı satım bölgesi
-    - RSI 45 altında (zayıf bölge)
-    - RSI son 3 mumda en az birinde daha düşüktü (yukarı dönüş başlıyor)
-    - Kapanış, son 3 mumun en düşük kapanışından yüksek (dip dönüşü)
+    Bollinger Squeeze + RSI 50 Kesişimi:
+    1. BB bantları daralmış (son squeeze_lookback mumun en dar noktasına yakın)
+    2. RSI önceki mumda 50 altında, bu mumda 50 üstüne çıktı (50 kesişimi)
+    3. Fiyat orta bandın (MA) üzerinde kapandı
     """
-    if idx < window + 3:
+    if idx < window + squeeze_lookback + 2:
         return False
     try:
-        pw         = closes.iloc[idx - window: idx + 1]
-        ma         = float(pw.mean())
-        std        = float(pw.std())
-        lower_band = ma - num_std * std
-        curr_close = float(closes.iloc[idx])
-        curr_rsi   = float(rsi.iloc[idx])
+        curr_rsi = float(rsi.iloc[idx])
+        prev_rsi = float(rsi.iloc[idx - 1])
 
-        # Alt banda %3 toleransla yakın mı?
-        near_band = curr_close <= lower_band * 1.03
+        # RSI 50 kesişimi: önceki mum altında, bu mum üstünde
+        rsi_cross_50 = prev_rsi < 50 and curr_rsi >= 50
 
-        # RSI 45 altında
-        rsi_weak = curr_rsi < 45
+        if not rsi_cross_50:
+            return False
 
-        # RSI son 3 mumun en düşüğünden yüksek (dönüş başlıyor)
-        rsi_min_3 = min(float(rsi.iloc[idx-1]), float(rsi.iloc[idx-2]), float(rsi.iloc[idx-3]))
-        rsi_turning = curr_rsi > rsi_min_3
+        # Mevcut BB genişliği
+        curr_width = calc_bb_width(closes, idx, window, num_std)
+        if curr_width is None:
+            return False
 
-        # Fiyat son 3 mumun en düşük kapanışından yüksek
-        c_min_3 = min(float(closes.iloc[idx-1]), float(closes.iloc[idx-2]), float(closes.iloc[idx-3]))
-        price_turning = curr_close > c_min_3
+        # Son squeeze_lookback mumun BB genişliklerini hesapla
+        widths = []
+        for j in range(1, squeeze_lookback + 1):
+            w = calc_bb_width(closes, idx - j, window, num_std)
+            if w is not None:
+                widths.append(w)
 
-        return near_band and rsi_weak and rsi_turning and price_turning
+        if not widths:
+            return False
+
+        # Sıkışma: mevcut genişlik, geçmiş genişliklerin ortalamasının %70'inden az
+        avg_width = sum(widths) / len(widths)
+        is_squeeze = curr_width < avg_width * 0.70
+
+        # Fiyat orta bandın üzerinde kapandı
+        pw = closes.iloc[idx - window: idx + 1]
+        middle_band  = float(pw.mean())
+        curr_close   = float(closes.iloc[idx])
+        above_middle = curr_close > middle_band
+
+        return is_squeeze and above_middle
     except Exception:
         return False
 
@@ -385,8 +408,8 @@ def scan_ticker(ticker, interval, days_back, strategies, trend_period, son_n):
 
         # Bollinger + EMA
         if "Bollinger RSI" in strategies:
-            if check_bollinger_rsi(closes, rsi, i):
-                signals.append("Bollinger+RSI")
+            if check_bollinger_squeeze_rsi(closes, rsi, i):
+                signals.append("BB Squeeze+RSI50")
 
         if "EMA Hacim" in strategies:
             if check_ema_squeeze_volume(df, closes, emas, i):
