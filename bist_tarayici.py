@@ -658,11 +658,13 @@ st.markdown("---")
 if "results" not in st.session_state:
     st.session_state.results = []
     st.session_state.done = False
+    st.session_state.bolge_filtre = "Filtre Yok"
 
 if btn:
     if not strategies:
         st.warning("En az bir strateji sec!")
     else:
+        st.session_state.bolge_filtre = bolge_filtre
         if hisse_sec:
             taranacak = [h for h in HISSELER if h.replace(".IS", "") in hisse_sec]
         else:
@@ -677,7 +679,7 @@ if btn:
         for i, ticker in enumerate(taranacak):
             durum.caption("Taraniyor: " + ticker)
             prog.progress((i + 1) / len(taranacak))
-            rows = scan_ticker(ticker, interval, days_back, strategies, trend_per, son_n, bolge_filtre)
+            rows = scan_ticker(ticker, interval, days_back, strategies, trend_per, son_n, st.session_state.bolge_filtre)
             all_res.extend(rows)
             sayi.markdown("Bulunan sinyal: " + str(len(all_res)))
             if (i + 1) % 25 == 0:
