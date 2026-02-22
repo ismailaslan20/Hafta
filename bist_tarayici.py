@@ -89,7 +89,8 @@ def check_hammer(o, h, l, c):
         return False
     lower = min(o, c) - l
     upper = h - max(o, c)
-    return lower >= 2.0 * body and upper <= 0.1 * rng
+    # Alt fitil gövdenin en az 2 katı, üst fitil toplam aralığın %30'undan az
+    return lower >= 2.0 * body and upper <= 0.3 * rng
 
 def check_engulfing(o1, c1, o2, c2):
     return c1 < o1 and c2 > o2 and o2 < c1 and c2 > o1
@@ -138,50 +139,58 @@ def calc_rsi(closes, period=14):
     rs = avg_gain / avg_loss.replace(0, np.nan)
     return 100 - (100 / (1 + rs))
 
-def find_pivot_lows(series, left=3, right=3):
+def find_pivot_lows(series, left=3, right=0):
     """
-    Gerçek pivot dipleri bulur: solunda ve sağında 'left'/'right' kadar
-    mumdan daha düşük olan noktalar. TradingView mantığıyla aynı.
+    Pivot dipleri bulur.
+    right=0 → sağ taraf kontrolü yok, son mumlar da pivot olabilir.
     """
     pivots = []
     vals = series.values
-    for i in range(left, len(vals) - right):
-        window = list(vals[i - left:i]) + list(vals[i + 1:i + right + 1])
-        if all(vals[i] <= w for w in window):
-            pivots.append(i)
+    n = len(vals)
+    for i in range(left, n):
+        if not all(vals[i] <= vals[i - j] for j in range(1, left + 1)):
+            continue
+        if right > 0:
+            right_end = min(i + right + 1, n)
+            if not all(vals[i] <= vals[i + j] for j in range(1, right_end - i)):
+                continue
+        pivots.append(i)
     return pivots
 
-def check_bullish_divergence(closes, rsi, idx, lookback=60, left=3, right=3):
+def check_bullish_divergence(closes, rsi, idx, lookback=60, left=3, right=0):
     """
-    Pivot tabanlı Pozitif RSI Uyumsuzluğu (TradingView tarzı):
-    1. Son mum bir pivot dip mi? (sağ taraf için right mum gerekir → idx en az right kadar geride olmalı)
-    2. Lookback penceresi içinde daha önceki bir pivot dip var mı?
-    3. Fiyat: son pivot < önceki pivot (lower low)
-    4. RSI:   son pivot RSI > önceki pivot RSI (higher low)
-    5. İkinci pivot RSI < 60 (aşırı satım veya orta bölge)
+    Pivot tabanlı Pozitif RSI Uyumsuzluğu:
+    - right=0: Son mumun kendisi pivot olabilir (sağ taraf beklenmez)
+    - Penceredeki son 2 gerçek pivot karşılaştırılır
+    - Fiyat lower low + RSI higher low = pozitif uyumsuzluk
     """
-    if idx < lookback + left + right:
+    if idx < left + 4:
         return False
 
-    # Tüm seri üzerinde pivot dipleri hesapla, sonra pencereye filtrele
-    window_closes = closes.iloc[idx - lookback: idx + 1]
-    window_rsi    = rsi.iloc[idx - lookback: idx + 1]
+    win_start = max(0, idx - lookback)
+    window_closes = closes.iloc[win_start: idx + 1]
+    window_rsi    = rsi.iloc[win_start: idx + 1]
 
-    if window_rsi.isna().sum() > lookback * 0.3:
+    if window_rsi.isna().sum() > len(window_rsi) * 0.3:
         return False
 
-    local_pivots = find_pivot_lows(window_closes, left=left, right=right)
+    local_pivots = find_pivot_lows(window_closes, left=left, right=0)
 
-    # En az 2 pivot gerekli
     if len(local_pivots) < 2:
         return False
 
-    # Son iki pivot
-    p2_local = local_pivots[-1]  # daha yeni pivot (pencere içi indeks)
-    p1_local = local_pivots[-2]  # daha eski pivot
+    p2_local = local_pivots[-1]   # en yeni pivot
+    p1_local = local_pivots[-2]   # bir önceki pivot
 
-    # Pencere içi → gerçek indeks dönüşümü
-    base = idx - lookback
+    # En yeni pivot son 5 mum içinde olsun (çok eski sinyalleri eleriz)
+    if len(window_closes) - 1 - p2_local > 5:
+        return False
+
+    # İki pivot arasında en az 5 mum olsun (aynı dip değil)
+    if p2_local - p1_local < 5:
+        return False
+
+    base = win_start
     p2 = base + p2_local
     p1 = base + p1_local
 
@@ -196,13 +205,16 @@ def check_bullish_divergence(closes, rsi, idx, lookback=60, left=3, right=3):
     if np.isnan(rsi_p1) or np.isnan(rsi_p2):
         return False
 
-    # Koşullar
-    price_lower_low = price_p2 < price_p1        # fiyat daha düşük dip
-    rsi_higher_low  = rsi_p2   > rsi_p1          # RSI daha yüksek dip
-    rsi_not_overbought = rsi_p2 < 60             # aşırı alım bölgesinde değil
-    pivots_close_enough = (p2 - p1) <= lookback  # çok uzak olmasın
+    price_lower_low    = price_p2 < price_p1
+    rsi_higher_low     = rsi_p2   > rsi_p1
+    rsi_not_overbought = rsi_p2   < 60
+    min_price_diff     = abs(price_p2 - price_p1) / price_p1 > 0.005
+    min_rsi_diff       = abs(rsi_p2 - rsi_p1) > 1.0
 
-    return price_lower_low and rsi_higher_low and rsi_not_overbought and pivots_close_enough
+    if price_lower_low and rsi_higher_low and rsi_not_overbought and min_price_diff and min_rsi_diff:
+        return True, (p1, p2, price_p1, price_p2, rsi_p1, rsi_p2)
+    return False, None
+
 
 def check_ema(emas, idx):
     """
@@ -317,9 +329,18 @@ def scan_ticker(ticker, interval, days_back, strategies, trend_period, son_n):
             if check_three_inside_up(rows3) and is_downtrend(closes, i, trend_period):
                 signals.append("Three Inside Up")
 
+        div_pivots = None
         if "RSI Uyumsuzlugu" in strategies:
-            if check_bullish_divergence(closes, rsi, i, lookback=60, left=3, right=3):
+            if interval == "1wk":
+                lb, lft = min(30, n - 10), 2
+            elif interval == "1mo":
+                lb, lft = min(18, n - 6), 1
+            else:
+                lb, lft = 60, 3
+            div_ok, div_info = check_bullish_divergence(closes, rsi, i, lookback=lb, left=lft, right=0)
+            if div_ok:
                 signals.append("Pozitif RSI Uyumsuzluğu")
+                div_pivots = div_info
 
         if "EMA Dizilimi" in strategies:
             bull, cross, pre_cross = check_ema(emas, i)
@@ -334,23 +355,24 @@ def scan_ticker(ticker, interval, days_back, strategies, trend_period, son_n):
             e = {p: round(float(emas[p].iloc[i]), 2) for p in [5, 14, 34, 55]}
             hafta_farki = n - 1 - i
             results.append({
-                "Hisse":   ticker.replace(".IS", ""),
-                "Tarih":   df.index[i].strftime("%Y-%m-%d"),
-                "Sinyal":  " | ".join(signals),
-                "Kapanis": round(c, 2),
-                "RSI14":   round(float(rsi.iloc[i]), 1),
-                "EMA5":    e[5],
-                "EMA14":   e[14],
-                "EMA34":   e[34],
-                "EMA55":   e[55],
-                "Zaman":   "Bu periyot" if hafta_farki == 0 else str(hafta_farki) + " periyot once",
-                "_ticker": ticker,
-                "_int":    interval,
-                "_days":   days_back,
+                "Hisse":       ticker.replace(".IS", ""),
+                "Tarih":       df.index[i].strftime("%Y-%m-%d"),
+                "Sinyal":      " | ".join(signals),
+                "Kapanis":     round(c, 2),
+                "RSI14":       round(float(rsi.iloc[i]), 1),
+                "EMA5":        e[5],
+                "EMA14":       e[14],
+                "EMA34":       e[34],
+                "EMA55":       e[55],
+                "Zaman":       "Bu periyot" if hafta_farki == 0 else str(hafta_farki) + " periyot once",
+                "_ticker":     ticker,
+                "_int":        interval,
+                "_days":       days_back,
+                "_div_pivots": div_pivots,
             })
     return results
 
-def draw_chart(ticker, interval, days_back, signal_dates):
+def draw_chart(ticker, interval, days_back, signal_dates, div_pivots=None):
     end_dt = datetime.today()
     start_dt = end_dt - timedelta(days=days_back)
     df = yf.download(
@@ -433,6 +455,34 @@ def draw_chart(ticker, interval, days_back, signal_dates):
     )
     fig.add_hline(y=70, line=dict(color="#ff6b6b", width=1, dash="dash"), row=2, col=1)
     fig.add_hline(y=30, line=dict(color="#00d4aa", width=1, dash="dash"), row=2, col=1)
+
+    # ── RSI Uyumsuzluk çizgileri ─────────────────────────────────────────────
+    if div_pivots:
+        p1_idx, p2_idx, price_p1, price_p2, rsi_p1, rsi_p2 = div_pivots
+        low_p1 = float(df["Low"].iloc[p1_idx]) if p1_idx < len(df) else price_p1
+        low_p2 = float(df["Low"].iloc[p2_idx]) if p2_idx < len(df) else price_p2
+
+        # Fiyat panelinde iki pivot dibi arasına çizgi
+        fig.add_trace(go.Scatter(
+            x=[p1_idx, p2_idx],
+            y=[low_p1, low_p2],
+            mode="lines+markers",
+            name="Fiyat Diverjans",
+            line=dict(color="#ff6b6b", width=2, dash="dot"),
+            marker=dict(size=8, color="#ff6b6b"),
+            showlegend=True,
+        ), row=1, col=1)
+
+        # RSI panelinde iki pivot RSI değeri arasına çizgi
+        fig.add_trace(go.Scatter(
+            x=[p1_idx, p2_idx],
+            y=[rsi_p1, rsi_p2],
+            mode="lines+markers",
+            name="RSI Diverjans",
+            line=dict(color="#00d4aa", width=2, dash="dot"),
+            marker=dict(size=8, color="#00d4aa"),
+            showlegend=True,
+        ), row=2, col=1)
 
     # X eksen etiketleri: her 10 mumda bir tarih göster
     step   = max(1, len(df) // 10)
@@ -577,8 +627,15 @@ if st.session_state.done:
         secim = st.selectbox("Hisse sec:", df_show["Hisse"].unique().tolist())
         if secim:
             ticker_f = secim + ".IS"
-            dates = df_show[df_show["Hisse"] == secim]["Tarih"].tolist()
-            draw_chart(ticker_f, interval, days_back, dates)
+            secim_rows = df_show[df_show["Hisse"] == secim]
+            dates = secim_rows["Tarih"].tolist()
+            # RSI uyumsuzluk pivot bilgisi (varsa ilk sinyalden al)
+            div_pivots = None
+            for _, srow in secim_rows.iterrows():
+                if "Pozitif RSI Uyumsuzluğu" in str(srow.get("Sinyal", "")) and srow.get("_div_pivots") is not None:
+                    div_pivots = srow["_div_pivots"]
+                    break
+            draw_chart(ticker_f, interval, days_back, dates, div_pivots=div_pivots)
 
             row = df_show[df_show["Hisse"] == secim].iloc[0]
             e1, e2, e3, e4 = st.columns(4)
