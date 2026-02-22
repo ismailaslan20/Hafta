@@ -125,27 +125,32 @@ def calc_rsi(closes, period=14):
     rs = avg_gain / avg_loss.replace(0, np.nan)
     return 100 - (100 / (1 + rs))
 
-# ─────────────────────────────────────────────
-# YENİ: MACD(100) hesaplama
-# fast=12, slow=100, signal=9
-# ─────────────────────────────────────────────
-def calc_macd(closes, fast=12, slow=100, signal=9):
-    ema_fast   = closes.ewm(span=fast,   adjust=False, min_periods=1).mean()
-    ema_slow   = closes.ewm(span=slow,   adjust=False, min_periods=1).mean()
-    macd_line  = ema_fast - ema_slow
-    signal_line = macd_line.ewm(span=signal, adjust=False, min_periods=1).mean()
-    histogram  = macd_line - signal_line
-    return macd_line, signal_line, histogram
 
 # ─────────────────────────────────────────────
-# YENİ: ADX hesaplama (Wilder yöntemi)
+# PusuV9 Mantığı:
+# MACD çizgisini 0-100 arasına normalize et
+# ADX değerini hesapla
+# Normalize MACD, ADX'i yukarı kestiğinde sinyal ver
+# (Pine kodundaki: ta.crossover(m_n, adx_v))
 # ─────────────────────────────────────────────
-def calc_adx(df, period=14):
+def calc_pusu_indicators(closes, df, macd_fast=12, macd_slow=26, macd_sig=9, adx_len=14, norm_period=50):
+    # MACD Hesapla
+    ema_fast = closes.ewm(span=macd_fast, adjust=False, min_periods=1).mean()
+    ema_slow = closes.ewm(span=macd_slow, adjust=False, min_periods=1).mean()
+    macd_line = ema_fast - ema_slow
+
+    # MACD'yi normalize et (0-100 arası) - Pine kodundaki m_n
+    macd_lowest  = macd_line.rolling(norm_period, min_periods=1).min()
+    macd_highest = macd_line.rolling(norm_period, min_periods=1).max()
+    denom = (macd_highest - macd_lowest).replace(0, np.nan)
+    m_n = 100 * (macd_line - macd_lowest) / denom
+    m_n = m_n.fillna(50)
+
+    # ADX Hesapla (Wilder)
     high  = df["High"].squeeze()
     low   = df["Low"].squeeze()
     close = df["Close"].squeeze()
 
-    # True Range
     prev_close = close.shift(1)
     tr = pd.concat([
         high - low,
@@ -153,65 +158,39 @@ def calc_adx(df, period=14):
         (low  - prev_close).abs()
     ], axis=1).max(axis=1)
 
-    # Directional Movement
     up_move   = high - high.shift(1)
     down_move = low.shift(1) - low
 
     plus_dm  = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
     minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
 
-    plus_dm_s  = pd.Series(plus_dm,  index=close.index).ewm(alpha=1/period, min_periods=1, adjust=False).mean()
-    minus_dm_s = pd.Series(minus_dm, index=close.index).ewm(alpha=1/period, min_periods=1, adjust=False).mean()
-    tr_s       = tr.ewm(alpha=1/period, min_periods=1, adjust=False).mean()
+    plus_dm_s  = pd.Series(plus_dm,  index=close.index).ewm(alpha=1/adx_len, min_periods=1, adjust=False).mean()
+    minus_dm_s = pd.Series(minus_dm, index=close.index).ewm(alpha=1/adx_len, min_periods=1, adjust=False).mean()
+    tr_s       = tr.ewm(alpha=1/adx_len, min_periods=1, adjust=False).mean()
 
     plus_di  = 100 * plus_dm_s  / tr_s.replace(0, np.nan)
     minus_di = 100 * minus_dm_s / tr_s.replace(0, np.nan)
 
     dx  = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan)
-    adx = dx.ewm(alpha=1/period, min_periods=1, adjust=False).mean()
+    adx = dx.ewm(alpha=1/adx_len, min_periods=1, adjust=False).mean()
 
-    return adx, plus_di, minus_di
+    return m_n, adx, plus_di, minus_di
 
-# ─────────────────────────────────────────────
-# YENİ: MACD+ADX sinyal kontrolü
-# Koşulların TAMAMI aynı anda gerçekleşmeli:
-# 1) MACD histogramı sıfırı yukarı kesti
-# 2) MACD çizgisi sinyal hattını yukarı kesti
-# 3) ADX 25 üzerinde (güçlü trend)
-# 4) Hem MACD hem ADX yukarı dönüyor (momentum artıyor)
-# ─────────────────────────────────────────────
-def check_macd_adx(macd_line, signal_line, histogram, adx, idx):
-    if idx < 2:
-        return False, []
 
-    # Mevcut ve önceki değerler
-    hist_curr  = float(histogram.iloc[idx])
-    hist_prev  = float(histogram.iloc[idx - 1])
-    macd_curr  = float(macd_line.iloc[idx])
-    macd_prev  = float(macd_line.iloc[idx - 1])
-    sig_curr   = float(signal_line.iloc[idx])
-    sig_prev   = float(signal_line.iloc[idx - 1])
-    adx_curr   = float(adx.iloc[idx])
-    adx_prev   = float(adx.iloc[idx - 1])
+def check_pusu_crossover(m_n, adx, idx):
+    """
+    Pine: ta.crossover(m_n, adx_v)
+    Yani: bir önceki barda m_n <= adx, bu barda m_n > adx
+    """
+    if idx < 1:
+        return False
+    prev_mn  = float(m_n.iloc[idx - 1])
+    curr_mn  = float(m_n.iloc[idx])
+    prev_adx = float(adx.iloc[idx - 1])
+    curr_adx = float(adx.iloc[idx])
 
-    # 4 koşul
-    hist_cross_zero   = hist_prev <= 0 and hist_curr > 0          # Histogram sıfırı yukarı kesti
-    macd_cross_signal = macd_prev <= sig_prev and macd_curr > sig_curr  # MACD sinyal hattını kesti
-    adx_above_25      = adx_curr > 25                             # ADX güçlü trend bölgesinde
-    both_rising       = macd_curr > macd_prev and adx_curr > adx_prev   # Her ikisi yukarı dönüyor
-
-    details = []
-    if hist_cross_zero:
-        details.append("Hist>0")
-    if macd_cross_signal:
-        details.append("MACD×Sig")
-    if adx_above_25:
-        details.append(f"ADX:{adx_curr:.1f}")
-    if both_rising:
-        details.append("↑Momentum")
-
-    all_conditions = hist_cross_zero and macd_cross_signal and adx_above_25 and both_rising
-    return all_conditions, details
+    crossover = (prev_mn <= prev_adx) and (curr_mn > curr_adx)
+    return crossover
 
 
 def check_bullish_divergence(closes, rsi, idx, lookback=20):
@@ -272,9 +251,8 @@ def scan_ticker(ticker, interval, days_back, strategies, trend_period, son_n):
     min_bars = {"1d": 60, "1wk": 30, "1mo": 12}
     min_required = min_bars.get(interval, 30)
 
-    # MACD(100) için en az 120 bar gerekli
-    if "MACD+ADX" in strategies:
-        min_required = max(min_required, 120)
+    if "PusuV9" in strategies:
+        min_required = max(min_required, 60)
 
     if df is None or df.empty or len(df) < min_required:
         return []
@@ -289,11 +267,10 @@ def scan_ticker(ticker, interval, days_back, strategies, trend_period, son_n):
     n      = len(df)
     results = []
 
-    # MACD ve ADX hesapla (sadece strateji seçildiyse)
-    macd_line = signal_line = histogram = adx_series = plus_di = minus_di = None
-    if "MACD+ADX" in strategies:
-        macd_line, signal_line, histogram = calc_macd(closes, fast=12, slow=100, signal=9)
-        adx_series, plus_di, minus_di     = calc_adx(df, period=14)
+    # PusuV9 indikatörlerini hesapla
+    m_n = adx_series = plus_di = minus_di = None
+    if "PusuV9" in strategies:
+        m_n, adx_series, plus_di, minus_di = calc_pusu_indicators(closes, df)
 
     min_ema_warmup = min(55, n - son_n - 1)
 
@@ -353,24 +330,24 @@ def scan_ticker(ticker, interval, days_back, strategies, trend_period, son_n):
             if pre_cross:
                 signals.append("EMA Yaklasim")
 
-        # ── YENİ: MACD(100) + ADX Stratejisi ──────────────────────────────
-        if "MACD+ADX" in strategies and macd_line is not None:
-            triggered, details = check_macd_adx(macd_line, signal_line, histogram, adx_series, i)
-            if triggered:
-                signals.append("MACD+ADX [" + " | ".join(details) + "]")
-        # ───────────────────────────────────────────────────────────────────
+        # ── PusuV9: Normalize MACD, ADX'i yukarı kestiğinde sinyal ──────────
+        if "PusuV9" in strategies and m_n is not None:
+            if check_pusu_crossover(m_n, adx_series, i):
+                mn_val  = round(float(m_n.iloc[i]), 1)
+                adx_val = round(float(adx_series.iloc[i]), 1)
+                signals.append(f"PusuV9 Kesişim [MACD_N:{mn_val} | ADX:{adx_val}]")
+        # ─────────────────────────────────────────────────────────────────────
 
         if signals:
             e = {p: round(float(emas[p].iloc[i]), 2) for p in [5, 14, 34, 55]}
             hafta_farki = n - 1 - i
 
-            # MACD+ADX ek bilgileri
             extra = {}
-            if macd_line is not None:
-                extra["MACD"]  = round(float(macd_line.iloc[i]), 4)
-                extra["ADX"]   = round(float(adx_series.iloc[i]), 1)
-                extra["+DI"]   = round(float(plus_di.iloc[i]), 1)
-                extra["-DI"]   = round(float(minus_di.iloc[i]), 1)
+            if m_n is not None:
+                extra["MACD_N"] = round(float(m_n.iloc[i]), 1)
+                extra["ADX"]    = round(float(adx_series.iloc[i]), 1)
+                extra["+DI"]    = round(float(plus_di.iloc[i]), 1)
+                extra["-DI"]    = round(float(minus_di.iloc[i]), 1)
 
             row = {
                 "Hisse":   ticker.replace(".IS", ""),
@@ -393,7 +370,7 @@ def scan_ticker(ticker, interval, days_back, strategies, trend_period, son_n):
     return results
 
 
-def draw_chart(ticker, interval, days_back, signal_dates, show_macd=False):
+def draw_chart(ticker, interval, days_back, signal_dates, show_pusu=False):
     end_dt = datetime.today()
     start_dt = end_dt - timedelta(days=days_back)
     df = yf.download(
@@ -411,17 +388,16 @@ def draw_chart(ticker, interval, days_back, signal_dates, show_macd=False):
 
     from plotly.subplots import make_subplots
 
-    if show_macd:
-        # 3 panel: Mum | MACD | RSI
+    if show_pusu:
+        # 3 panel: Mum | PusuV9 (MACD_N vs ADX) | RSI
         fig = make_subplots(
             rows=3, cols=1,
             shared_xaxes=True,
             row_heights=[0.55, 0.25, 0.20],
             vertical_spacing=0.03,
-            subplot_titles=("", "MACD (12/100/9)", "RSI 14"),
+            subplot_titles=("", "PusuV9 (Norm.MACD vs ADX)", "RSI 14"),
         )
-        macd_line, signal_line, histogram = calc_macd(closes, fast=12, slow=100, signal=9)
-        adx_series, plus_di, minus_di     = calc_adx(df, period=14)
+        m_n, adx_series, plus_di, minus_di = calc_pusu_indicators(closes, df)
     else:
         fig = make_subplots(
             rows=2, cols=1,
@@ -474,40 +450,54 @@ def draw_chart(ticker, interval, days_back, signal_dates, show_macd=False):
         except Exception:
             pass
 
-    if show_macd:
-        # MACD paneli
-        colors_hist = ["#00d4aa" if v >= 0 else "#ff6b6b" for v in histogram.tolist()]
+    if show_pusu:
+        # PusuV9 paneli: Normalize MACD (yeşil/kırmızı) ve ADX (mor)
+        mn_colors = ["#00d4aa" if float(m_n.iloc[j]) > float(m_n.iloc[j-1]) else "#ff6b6b"
+                     for j in range(len(m_n))]
         fig.add_trace(
-            go.Bar(
+            go.Scatter(
                 x=list(range(len(df))),
-                y=histogram.tolist(),
-                name="Histogram",
-                marker_color=colors_hist,
-                opacity=0.7,
+                y=m_n.tolist(),
+                name="MACD Norm",
+                line=dict(color="#00d4aa", width=2),
             ),
             row=2, col=1,
         )
         fig.add_trace(
             go.Scatter(
                 x=list(range(len(df))),
-                y=macd_line.tolist(),
-                name="MACD(100)",
-                line=dict(color="#0099ff", width=1.5),
+                y=adx_series.tolist(),
+                name="ADX",
+                line=dict(color="#cc88ff", width=2),
             ),
             row=2, col=1,
         )
-        fig.add_trace(
-            go.Scatter(
-                x=list(range(len(df))),
-                y=signal_line.tolist(),
-                name="Sinyal",
-                line=dict(color="#ffd166", width=1.5),
-            ),
-            row=2, col=1,
-        )
-        fig.add_hline(y=0, line=dict(color="#64748b", width=1, dash="dash"), row=2, col=1)
 
-        # RSI paneli (3. satır)
+        # Kesişim noktalarını işaretle
+        cross_x = []
+        cross_y = []
+        for j in range(1, len(m_n)):
+            prev_mn  = float(m_n.iloc[j - 1])
+            curr_mn  = float(m_n.iloc[j])
+            prev_adx = float(adx_series.iloc[j - 1])
+            curr_adx = float(adx_series.iloc[j])
+            if (prev_mn <= prev_adx) and (curr_mn > curr_adx):
+                cross_x.append(j)
+                cross_y.append(curr_mn)
+
+        if cross_x:
+            fig.add_trace(
+                go.Scatter(
+                    x=cross_x,
+                    y=cross_y,
+                    mode="markers",
+                    name="Kesişim",
+                    marker=dict(symbol="triangle-up", size=12, color="#ffd166"),
+                ),
+                row=2, col=1,
+            )
+
+        # RSI paneli
         fig.add_trace(
             go.Scatter(
                 x=list(range(len(df))),
@@ -519,7 +509,6 @@ def draw_chart(ticker, interval, days_back, signal_dates, show_macd=False):
         )
         fig.add_hline(y=70, line=dict(color="#ff6b6b", width=1, dash="dash"), row=3, col=1)
         fig.add_hline(y=30, line=dict(color="#00d4aa", width=1, dash="dash"), row=3, col=1)
-        rsi_row = 3
     else:
         fig.add_trace(
             go.Scatter(
@@ -532,13 +521,12 @@ def draw_chart(ticker, interval, days_back, signal_dates, show_macd=False):
         )
         fig.add_hline(y=70, line=dict(color="#ff6b6b", width=1, dash="dash"), row=2, col=1)
         fig.add_hline(y=30, line=dict(color="#00d4aa", width=1, dash="dash"), row=2, col=1)
-        rsi_row = 2
 
     step   = max(1, len(df) // 10)
     tvals  = list(range(0, len(df), step))
     tlabels = [df.index[i].strftime("%Y-%m-%d") for i in tvals]
 
-    height = 750 if show_macd else 620
+    height = 750 if show_pusu else 620
     fig.update_layout(
         paper_bgcolor="#0a0e1a",
         plot_bgcolor="#111827",
@@ -551,7 +539,7 @@ def draw_chart(ticker, interval, days_back, signal_dates, show_macd=False):
         margin=dict(l=10, r=10, t=30, b=10),
         height=height,
     )
-    if show_macd:
+    if show_pusu:
         fig.update_layout(xaxis3=dict(gridcolor="#1e2d40", tickmode="array", tickvals=tvals, ticktext=tlabels))
         fig.update_yaxes(range=[0, 100], row=3, col=1)
     else:
@@ -567,18 +555,14 @@ with st.sidebar:
     periyot = st.selectbox("Periyot", list(PERIYOT_MAP.keys()), index=1)
     interval, days_back = PERIYOT_MAP[periyot]
 
-    # MACD(100) için günlük 1 yıl+ gerekli → otomatik uzat
-    if interval == "1d":
-        days_back = max(days_back, 400)
-
     son_n = st.slider("Son kac mum taransin?", 1, 10, 3)
     trend_per = st.slider("Trend periyodu (mum)", 3, 15, 5)
     st.markdown("---")
     strategies = st.multiselect(
         "Stratejiler",
         ["Cekic", "Yutan", "Sabah Yildizi", "Three Inside Up",
-         "RSI Uyumsuzlugu", "EMA Dizilimi", "MACD+ADX"],
-        default=["MACD+ADX"],
+         "RSI Uyumsuzlugu", "EMA Dizilimi", "PusuV9"],
+        default=["PusuV9"],
     )
     hisse_sec = st.multiselect(
         "Hisse filtresi (bos=tumu):",
@@ -589,15 +573,13 @@ with st.sidebar:
     btn = st.button("TARAMAYI BASLAT")
     st.caption(str(len(HISSELER)) + " hisse listede")
 
-    # MACD+ADX seçildiyse bilgi notu
-    if "MACD+ADX" in strategies:
+    if "PusuV9" in strategies:
         st.info(
-            "**MACD(12/100/9) + ADX(14)**\n\n"
-            "Tüm koşullar aynı anda:\n"
-            "- Histogram 0'ı yukarı kesti\n"
-            "- MACD sinyal hattını yukarı kesti\n"
-            "- ADX > 25 (güçlü trend)\n"
-            "- MACD & ADX yukarı dönüyor"
+            "**PusuV9 Kesişim**\n\n"
+            "Normalize MACD (12/26/9), ADX'i\n"
+            "yukarı kestiğinde sinyal verir.\n\n"
+            "Grafik panelinde yeşil = MACD_N\n"
+            "mor = ADX, sarı üçgen = kesişim"
         )
 
 st.markdown("# BIST Formasyon Tarayici")
@@ -670,9 +652,8 @@ if st.session_state.done:
         if fz:
             df_show = df_show[df_show["Zaman"].isin(fz)]
 
-        # Gösterilecek kolonlar (MACD+ADX varsa ekstra kolonlar da göster)
         base_cols = ["Hisse", "Tarih", "Sinyal", "Kapanis", "RSI14", "EMA5", "EMA14", "EMA34", "EMA55", "Zaman"]
-        extra_cols = [c for c in ["MACD", "ADX", "+DI", "-DI"] if c in df_show.columns]
+        extra_cols = [c for c in ["MACD_N", "ADX", "+DI", "-DI"] if c in df_show.columns]
         show_cols = base_cols + extra_cols
 
         st.markdown("### Sonuclar: " + str(len(df_show)) + " sinyal")
@@ -697,9 +678,8 @@ if st.session_state.done:
             ticker_f = secim + ".IS"
             dates = df_show[df_show["Hisse"] == secim]["Tarih"].tolist()
 
-            # MACD+ADX seçiliyse MACD panelini göster
-            show_macd_panel = "MACD+ADX" in strategies
-            draw_chart(ticker_f, interval, days_back, dates, show_macd=show_macd_panel)
+            show_pusu_panel = "PusuV9" in strategies
+            draw_chart(ticker_f, interval, days_back, dates, show_pusu=show_pusu_panel)
 
             row = df_show[df_show["Hisse"] == secim].iloc[0]
             e1, e2, e3, e4 = st.columns(4)
@@ -712,11 +692,10 @@ if st.session_state.done:
             with e4:
                 st.metric("EMA 55", row["EMA55"])
 
-            # MACD+ADX varsa ek metrikler
             if "ADX" in row and pd.notna(row.get("ADX")):
                 m1, m2, m3, m4 = st.columns(4)
                 with m1:
-                    st.metric("MACD(100)", row.get("MACD", "-"))
+                    st.metric("MACD Norm", row.get("MACD_N", "-"))
                 with m2:
                     st.metric("ADX", row.get("ADX", "-"))
                 with m3:
