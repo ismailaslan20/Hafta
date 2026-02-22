@@ -407,7 +407,7 @@ def scan_ticker(ticker, interval, days_back, strategies, trend_period, son_n):
                 signals.append("RSI 30 Dönüşü")
 
         # Bollinger + EMA
-        if "Bollinger RSI" in strategies:
+        if "BB Squeeze" in strategies:
             if check_bollinger_squeeze_rsi(closes, rsi, i):
                 signals.append("BB Squeeze+RSI50")
 
@@ -549,9 +549,9 @@ with st.sidebar:
     strategies = st.multiselect(
         "Stratejiler",
         ["Cekic", "Yutan", "Sabah Yildizi", "Three Inside Up",
-         "RSI Uyumsuzlugu", "RSI Donus", "Bollinger RSI",
+         "RSI Uyumsuzlugu", "RSI Donus", "BB Squeeze",
          "EMA Hacim", "Inside Bar", "EMA Dizilimi"],
-        default=["RSI Donus", "Bollinger RSI", "EMA Hacim", "Inside Bar"],
+        default=["RSI Donus", "BB Squeeze", "EMA Hacim", "Inside Bar"],
     )
     hisse_sec = st.multiselect(
         "Hisse filtresi (bos=tumu):",
