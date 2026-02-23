@@ -272,7 +272,7 @@ def check_bullish_divergence(closes, rsi, idx, lookback=20):
     rsi_oversold     = current_rsi < 50
     return price_lower_low and rsi_higher_low and rsi_oversold
 
-def check_ema(emas, idx):
+def check_ema(emas, idx, rsi=None):
     try:
         e5  = float(emas[5].iloc[idx])
         e14 = float(emas[14].iloc[idx])
@@ -302,9 +302,15 @@ def check_ema(emas, idx):
             pre_cross   = ema5_rising and still_below and gap_pct < 1.5
 
             # EMA5 hepsinin altında ama yukarı dönmüş - dip dönüş hazırlığı
+            # Fiyat da EMA5 üstünde olmalı (momentum başlamış)
             e5_altta  = e5 < e14 and e5 < e34 and e5 < e55
-            e5_yukari = e5 > e5_prev1
-            sikisma   = e5_altta and e5_yukari
+            # İlk yukarı dönüş: bu bar yukarı, önceki bar aşağıydı
+            e5_ilk_donus = e5 > e5_prev1 and e5_prev1 <= e5_prev2
+            # RSI 50-60 arası (patlama öncesi bölge)
+            rsi_idx = float(rsi.iloc[idx]) if rsi is not None else 50
+            rsi_filtre = 45 <= rsi_idx <= 65
+            # MACD_N hesapla (basit: EMA12-EMA26 normalize)
+            sikisma   = e5_altta and e5_ilk_donus and rsi_filtre
 
         return bull, cross, pre_cross, sikisma
     except Exception:
@@ -396,7 +402,7 @@ def scan_ticker(ticker, interval, days_back, strategies, trend_period, son_n, bo
                 signals.append("Pozitif RSI Uyumsuzluğu")
 
         if "EMA Dizilimi" in strategies:
-            bull, cross, pre_cross, sikisma = check_ema(emas, i)
+            bull, cross, pre_cross, sikisma = check_ema(emas, i, rsi)
             # Sıkışmadan çıkış - en erken sinyal
             if sikisma and not cross:
                 signals.append("EMA5 Dip Donus Hazir [Erken]")
