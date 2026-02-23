@@ -145,6 +145,10 @@ if ekle_btn and ticker_gir:
             "not":     not_gir,
             "tur":     "alis"
         })
+        # Yeni hisse fiyatını hemen çek
+        f = fiyat_cek(ticker_gir)
+        if f:
+            st.session_state.fiyatlar[ticker_gir] = f
         st.sidebar.success(f"✅ {ticker_gir} alış kaydedildi!")
     else:
         # Satış kontrolü
@@ -163,6 +167,11 @@ if ekle_btn and ticker_gir:
 
     kaydet(veri)
     st.session_state.veri = veri
+    # Yeni hisse icin fiyat hemen cek
+    if ticker_gir and ticker_gir not in st.session_state.fiyatlar:
+        f = fiyat_cek(ticker_gir)
+        if f:
+            st.session_state.fiyatlar[ticker_gir] = f
     st.rerun()
 
 # ── Fiyat güncelle ────────────────────────────
@@ -205,13 +214,6 @@ else:
             toplam_deger += deger
             toplam_kar   += kar_tl
 
-        # Kurtarma hedefi (sadece zarardaysa)
-        kurtarma_tl  = None
-        kurtarma_pct = None
-        if kar_tl is not None and kar_tl < 0:
-            kurtarma_tl  = abs(kar_tl)
-            kurtarma_pct = abs(kar_tl) / maliyet * 100 if maliyet > 0 else None
-
         satirlar.append({
             "Hisse":        ticker,
             "Adet":         adet,
@@ -221,8 +223,6 @@ else:
             "Güncel Değer (TL)":   deger,
             "Kar/Zarar (TL)":      kar_tl,
             "Kar/Zarar (%)":       kar_pct,
-            "Kurtarma (TL)":       kurtarma_tl,
-            "Kurtarma (%)": kurtarma_pct,
         })
 
     # Kartlar
@@ -285,27 +285,12 @@ else:
     df_display["Güncel Değer (TL)"]    = df_display["Güncel Değer (TL)"].apply(lambda x: fmt(x, " ₺"))
     df_display["Kar/Zarar (TL)"]       = df_display["Kar/Zarar (TL)"].apply(lambda x: ("+" if x and x >= 0 else "") + fmt(x, " ₺") if x is not None else "-")
     df_display["Kar/Zarar (%)"]        = df_display["Kar/Zarar (%)"].apply(lambda x: ("+" if x and x >= 0 else "") + fmt(x, "%") if x is not None else "-")
-    df_display["Kurtarma (TL)"]        = df_display["Kurtarma (TL)"].apply(lambda x: fmt(x, " ₺") if x is not None else "✅")
-    df_display["Kurtarma (%)"]         = df_display["Kurtarma (%)"].apply(lambda x: fmt(x, "%") if x is not None else "✅")
+
 
     styled = df_display.style.applymap(kar_renk, subset=["Kar/Zarar (TL)", "Kar/Zarar (%)"])
     st.dataframe(styled, use_container_width=True, hide_index=True)
 
-    # Zararda olan hisseler için kurtarma kartları
-    zarar_var = [s for s in satirlar if s.get("Kurtarma (TL)") is not None]
-    if zarar_var:
-        st.markdown("---")
-        st.markdown("### 🎯 Ana Paraya Dönüş Hedefi")
-        cols = st.columns(min(len(zarar_var), 3))
-        for idx, s in enumerate(zarar_var):
-            with cols[idx % 3]:
-                st.markdown(f"""
-                <div class="hedef-kart">
-                    <b>{s["Hisse"]}</b><br>
-                    📈 Gerekli artış: <b style="color:#e53935">{s["Kurtarma (%)"]:,.2f}%</b><br>
-                    💰 Gerekli kazanç: <b style="color:#e53935">{s["Kurtarma (TL)"]:,.2f} ₺</b><br>
-                    🎯 Hedef fiyat: <b style="color:#1a73e8">{s["Ort. Maliyet"]:,.2f} ₺</b>
-                </div>""", unsafe_allow_html=True)
+
 
     # ── Satış geçmişi ─────────────────────────
     if veri.get("satislar"):
