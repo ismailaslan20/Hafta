@@ -9,22 +9,27 @@ st.set_page_config(page_title="Portföy Takip", page_icon="💼", layout="wide")
 
 st.markdown("""
 <style>
-.stApp { background: #0a0e1a; color: #e2e8f0; }
-section[data-testid="stSidebar"] { background: #111827; }
+.stApp { background: #f0f6ff; color: #1a2340; }
+section[data-testid="stSidebar"] { background: #e8f0fe; }
 .stButton > button {
-    background: linear-gradient(135deg, #00d4aa, #0099ff);
-    color: #0a0e1a; border: none; border-radius: 8px;
+    background: linear-gradient(135deg, #1a73e8, #00bfa5);
+    color: #ffffff; border: none; border-radius: 8px;
     font-weight: 700; width: 100%; padding: 0.6rem;
 }
-.kar   { color: #00d4aa; font-weight: 700; }
-.zarar { color: #ff6b6b; font-weight: 700; }
+.kar   { color: #00897b; font-weight: 700; }
+.zarar { color: #e53935; font-weight: 700; }
 .kart {
-    background: #111827; border: 1px solid #1e2d40;
+    background: #ffffff; border: 1px solid #c5d8f5;
     border-radius: 12px; padding: 1.2rem 1.5rem; margin-bottom: 0.8rem;
-    text-align: center;
+    text-align: center; box-shadow: 0 2px 8px rgba(26,115,232,0.08);
 }
-.kart-baslik { font-size: 0.75rem; color: #64748b; text-transform: uppercase; margin-bottom: 0.3rem; }
-.kart-deger  { font-size: 1.8rem; font-weight: 700; color: #00d4aa; }
+.kart-baslik { font-size: 0.75rem; color: #5f7a9d; text-transform: uppercase; margin-bottom: 0.3rem; }
+.kart-deger  { font-size: 1.8rem; font-weight: 700; color: #1a73e8; }
+.hedef-kart {
+    background: #fff8e1; border: 1px solid #ffe082;
+    border-radius: 10px; padding: 0.8rem 1rem; margin: 0.3rem 0;
+    font-size: 0.9rem;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -195,6 +200,13 @@ else:
             toplam_deger += deger
             toplam_kar   += kar_tl
 
+        # Kurtarma hedefi (sadece zarardaysa)
+        kurtarma_tl  = None
+        kurtarma_pct = None
+        if kar_tl is not None and kar_tl < 0:
+            kurtarma_tl  = abs(kar_tl)
+            kurtarma_pct = abs(kar_tl) / maliyet * 100 if maliyet > 0 else None
+
         satirlar.append({
             "Hisse":        ticker,
             "Adet":         adet,
@@ -204,6 +216,8 @@ else:
             "Güncel Değer (TL)":   deger,
             "Kar/Zarar (TL)":      kar_tl,
             "Kar/Zarar (%)":       kar_pct,
+            "Kurtarma (TL)":       kurtarma_tl,
+            "Kurtarma (%)": kurtarma_pct,
         })
 
     # Kartlar
@@ -266,9 +280,27 @@ else:
     df_display["Güncel Değer (TL)"]    = df_display["Güncel Değer (TL)"].apply(lambda x: fmt(x, " ₺"))
     df_display["Kar/Zarar (TL)"]       = df_display["Kar/Zarar (TL)"].apply(lambda x: ("+" if x and x >= 0 else "") + fmt(x, " ₺") if x is not None else "-")
     df_display["Kar/Zarar (%)"]        = df_display["Kar/Zarar (%)"].apply(lambda x: ("+" if x and x >= 0 else "") + fmt(x, "%") if x is not None else "-")
+    df_display["Kurtarma (TL)"]        = df_display["Kurtarma (TL)"].apply(lambda x: fmt(x, " ₺") if x is not None else "✅")
+    df_display["Kurtarma (%)"]         = df_display["Kurtarma (%)"].apply(lambda x: fmt(x, "%") if x is not None else "✅")
 
     styled = df_display.style.applymap(kar_renk, subset=["Kar/Zarar (TL)", "Kar/Zarar (%)"])
     st.dataframe(styled, use_container_width=True, hide_index=True)
+
+    # Zararda olan hisseler için kurtarma kartları
+    zarar_var = [s for s in satirlar if s.get("Kurtarma (TL)") is not None]
+    if zarar_var:
+        st.markdown("---")
+        st.markdown("### 🎯 Ana Paraya Dönüş Hedefi")
+        cols = st.columns(min(len(zarar_var), 3))
+        for idx, s in enumerate(zarar_var):
+            with cols[idx % 3]:
+                st.markdown(f"""
+                <div class="hedef-kart">
+                    <b>{s["Hisse"]}</b><br>
+                    📈 Gerekli artış: <b style="color:#e53935">{s["Kurtarma (%)"]:,.2f}%</b><br>
+                    💰 Gerekli kazanç: <b style="color:#e53935">{s["Kurtarma (TL)"]:,.2f} ₺</b><br>
+                    🎯 Hedef fiyat: <b style="color:#1a73e8">{s["Ort. Maliyet"]:,.2f} ₺</b>
+                </div>""", unsafe_allow_html=True)
 
     # ── Satış geçmişi ─────────────────────────
     if veri.get("satislar"):
