@@ -236,20 +236,12 @@ else:
     # Tablo
     df_goster = pd.DataFrame(satirlar)
 
-    def format_row(row):
-        styles = []
-        for col in row.index:
-            if col in ("Kar/Zarar (TL)", "Kar/Zarar (%)"):
-                val = row[col]
-                if val is not None and val >= 0:
-                    styles.append("color: #00d4aa; font-weight: bold")
-                elif val is not None:
-                    styles.append("color: #ff6b6b; font-weight: bold")
-                else:
-                    styles.append("")
-            else:
-                styles.append("")
-        return styles
+    def kar_renk(val):
+        try:
+            temiz = str(val).replace("₺","").replace("%","").replace("+","").replace(" ","").replace(",","")
+            return "color: #00d4aa; font-weight: bold" if float(temiz) >= 0 else "color: #ff6b6b; font-weight: bold"
+        except:
+            return ""
 
     def fmt(val, suffix=""):
         if val is None:
@@ -267,11 +259,8 @@ else:
     df_display["Kar/Zarar (TL)"]       = df_display["Kar/Zarar (TL)"].apply(lambda x: ("+" if x and x >= 0 else "") + fmt(x, " ₺") if x is not None else "-")
     df_display["Kar/Zarar (%)"]        = df_display["Kar/Zarar (%)"].apply(lambda x: ("+" if x and x >= 0 else "") + fmt(x, "%") if x is not None else "-")
 
-    st.dataframe(
-        df_display.style.apply(format_row, axis=1),
-        use_container_width=True,
-        hide_index=True,
-    )
+    styled = df_display.style.applymap(kar_renk, subset=["Kar/Zarar (TL)", "Kar/Zarar (%)"])
+    st.dataframe(styled, use_container_width=True, hide_index=True)
 
     # ── Satış geçmişi ─────────────────────────
     if veri.get("satislar"):
