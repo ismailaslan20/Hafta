@@ -381,12 +381,22 @@ def scan_ticker(ticker, interval, days_back, strategies, trend_period, son_n, bo
 
         if "EMA Dizilimi" in strategies:
             bull, cross, pre_cross = check_ema(emas, i)
-            if bull:
-                signals.append("EMA Dizilim")
+            # Sadece yeni başlayanları yakala: EMA5 yeni EMA14'ü kesti veya yaklaşıyor
             if cross:
-                signals.append("EMA Kesisim")
+                signals.append("EMA Kesisim [Yeni Basladı]")
             if pre_cross:
-                signals.append("EMA Yaklasim")
+                signals.append("EMA Yaklasim [Yakında]")
+            # Tam dizilim: sadece son 5 mum içinde cross olduysa kabul et
+            if bull and not cross and not pre_cross:
+                recent_cross = False
+                for lookback in range(1, 6):
+                    if i - lookback >= 0:
+                        _, lc, _ = check_ema(emas, i - lookback)
+                        if lc:
+                            recent_cross = True
+                            break
+                if recent_cross:
+                    signals.append("EMA Dizilim [Yeni]")
 
         # ── Golden Cross: EMA50 EMA200'ü yukarı kesiyor, fiyat EMA20 üstünde ──
         if "Golden Cross" in strategies:
