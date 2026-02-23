@@ -301,13 +301,10 @@ def check_ema(emas, idx):
             gap_pct     = (e14 - e5) / e14 * 100
             pre_cross   = ema5_rising and still_below and gap_pct < 1.5
 
-            # Sıkışma: tüm EMA'lar birbirine çok yakın (max-min farkı < %3)
-            ema_vals = [e5, e14, e34, e55]
-            ema_max  = max(ema_vals)
-            ema_min  = min(ema_vals)
-            sikisma_pct = (ema_max - ema_min) / ema_max * 100
-            # Sıkışmadan çıkış: EMA5 yukarı dönmüş
-            sikisma = sikisma_pct < 3.0 and e5 > e5_prev1
+            # EMA5 hepsinin altında ama yukarı dönmüş - dip dönüş hazırlığı
+            e5_altta  = e5 < e14 and e5 < e34 and e5 < e55
+            e5_yukari = e5 > e5_prev1
+            sikisma   = e5_altta and e5_yukari
 
         return bull, cross, pre_cross, sikisma
     except Exception:
@@ -402,7 +399,7 @@ def scan_ticker(ticker, interval, days_back, strategies, trend_period, son_n, bo
             bull, cross, pre_cross, sikisma = check_ema(emas, i)
             # Sıkışmadan çıkış - en erken sinyal
             if sikisma and not cross:
-                signals.append("EMA Sikisma Cikis [Erken]")
+                signals.append("EMA5 Dip Donus Hazir [Erken]")
             # EMA5 EMA14'e yaklaşıyor
             if pre_cross:
                 signals.append("EMA Yaklasim [Yakında]")
