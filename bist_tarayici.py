@@ -341,7 +341,12 @@ def scan_ticker(ticker, interval, days_back, strategies, trend_period, son_n, bo
     if not {"Open", "High", "Low", "Close"}.issubset(df.columns):
         return []
 
-    closes = df["Close"].squeeze()
+    # Tüm kolonları squeeze et - MultiIndex sorununu önle
+    df["Open"]  = df["Open"].squeeze()
+    df["High"]  = df["High"].squeeze()
+    df["Low"]   = df["Low"].squeeze()
+    df["Close"] = df["Close"].squeeze()
+    closes = df["Close"]
     emas   = calc_emas(closes)
     rsi    = calc_rsi(closes)
     n      = len(df)
