@@ -48,18 +48,23 @@ def kaydet(veri):
 
 # ── Anlık fiyat çek ───────────────────────────
 def fiyat_cek(ticker):
+    import math
     try:
         hisse = yf.Ticker(ticker + ".IS")
         bilgi = hisse.fast_info
         fiyat = bilgi.last_price
-        if fiyat and fiyat > 0:
+        if fiyat and not math.isnan(float(fiyat)) and float(fiyat) > 0:
             return float(fiyat)
-        # Yedek yöntem
+    except:
+        pass
+    try:
         df = yf.download(ticker + ".IS", period="5d", interval="1d", progress=False, auto_adjust=True)
         if df is not None and not df.empty:
             if isinstance(df.columns, __import__("pandas").MultiIndex):
                 df.columns = df.columns.get_level_values(0)
-            return float(df["Close"].squeeze().iloc[-1])
+            val = float(df["Close"].squeeze().iloc[-1])
+            if not math.isnan(val) and val > 0:
+                return val
     except:
         pass
     return None
@@ -109,7 +114,7 @@ with st.sidebar:
     islem_turu = st.radio("İşlem Türü", ["📈 Alış", "📉 Satış"], horizontal=True)
     st.markdown("---")
 
-    ticker_gir = st.text_input("Hisse Kodu (örn: EREGL)", "").upper().strip()
+    ticker_gir = st.text_input("Hisse Kodu (örn: EREGL - BÜYÜK HARF)", "").upper().strip()
     adet_gir   = st.number_input("Adet", min_value=0.01, value=1.0, step=1.0)
     fiyat_gir  = st.number_input("Fiyat (TL)", min_value=0.01, value=1.0, step=0.01, format="%.2f")
     tarih_gir  = st.date_input("Tarih", value=datetime.today())
