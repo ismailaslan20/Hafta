@@ -44,9 +44,17 @@ def kaydet(veri):
 # ── Anlık fiyat çek ───────────────────────────
 def fiyat_cek(ticker):
     try:
-        df = yf.download(ticker + ".IS", period="1d", interval="1m", progress=False, auto_adjust=True)
+        hisse = yf.Ticker(ticker + ".IS")
+        bilgi = hisse.fast_info
+        fiyat = bilgi.last_price
+        if fiyat and fiyat > 0:
+            return float(fiyat)
+        # Yedek yöntem
+        df = yf.download(ticker + ".IS", period="5d", interval="1d", progress=False, auto_adjust=True)
         if df is not None and not df.empty:
-            return float(df["Close"].iloc[-1])
+            if isinstance(df.columns, __import__("pandas").MultiIndex):
+                df.columns = df.columns.get_level_values(0)
+            return float(df["Close"].squeeze().iloc[-1])
     except:
         pass
     return None
