@@ -328,11 +328,20 @@ else:
         st.dataframe(df_satis, use_container_width=True, hide_index=True)
 
     # ── İşlem geçmişi ─────────────────────────
-    with st.expander("📋 Tüm İşlem Geçmişi"):
+    with st.expander("📋 Tüm İşlem Geçmişi (Satır Sil)"):
         if veri["islemler"]:
-            df_isl = pd.DataFrame(veri["islemler"])
-            df_isl.columns = ["Hisse", "Adet", "Fiyat", "Tarih", "Not", "Tür"]
-            st.dataframe(df_isl, use_container_width=True, hide_index=True)
+            for idx, isl in enumerate(veri["islemler"]):
+                c1, c2, c3, c4, c5, c6 = st.columns([2, 2, 2, 2, 3, 1])
+                c1.write(isl["ticker"])
+                c2.write(f"{isl['adet']:.0f} adet")
+                c3.write(f"{isl['fiyat']:.2f} ₺")
+                c4.write(isl["tarih"])
+                c5.write(isl.get("not", ""))
+                if c6.button("🗑️", key=f"sil_{idx}"):
+                    veri["islemler"].pop(idx)
+                    kaydet(veri)
+                    st.session_state.veri = veri
+                    st.rerun()
         else:
             st.info("Henüz işlem yok.")
 
