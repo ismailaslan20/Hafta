@@ -274,25 +274,44 @@ def check_bullish_divergence(closes, rsi, idx, lookback=20):
 
 def check_ema(emas, idx):
     try:
-        e5      = float(emas[5].iloc[idx])
-        e14     = float(emas[14].iloc[idx])
-        e34     = float(emas[34].iloc[idx])
-        e55     = float(emas[55].iloc[idx])
-        bull    = e5 > e14 > e34 > e55
+        e5  = float(emas[5].iloc[idx])
+        e14 = float(emas[14].iloc[idx])
+        e34 = float(emas[34].iloc[idx])
+        e55 = float(emas[55].iloc[idx])
+
+        # Tam dizilim
+        bull = e5 > e14 > e34 > e55
+
         cross     = False
         pre_cross = False
+        sikisma   = False
+
         if idx >= 3:
             e5_prev1  = float(emas[5].iloc[idx - 1])
             e5_prev2  = float(emas[5].iloc[idx - 2])
             e14_prev1 = float(emas[14].iloc[idx - 1])
+            e34_prev1 = float(emas[34].iloc[idx - 1])
+
+            # EMA5 EMA14'ü yeni kesti
             cross = e5_prev1 < e14_prev1 and e5 > e14
+
+            # EMA5 yukarı gidiyor, henüz kesmedi, yakın
             ema5_rising = e5 > e5_prev1 > e5_prev2
             still_below = e5 < e14
             gap_pct     = (e14 - e5) / e14 * 100
             pre_cross   = ema5_rising and still_below and gap_pct < 1.5
-        return bull, cross, pre_cross
+
+            # Sıkışma: tüm EMA'lar birbirine çok yakın (max-min farkı < %3)
+            ema_vals = [e5, e14, e34, e55]
+            ema_max  = max(ema_vals)
+            ema_min  = min(ema_vals)
+            sikisma_pct = (ema_max - ema_min) / ema_max * 100
+            # Sıkışmadan çıkış: EMA5 yukarı dönmüş
+            sikisma = sikisma_pct < 3.0 and e5 > e5_prev1
+
+        return bull, cross, pre_cross, sikisma
     except Exception:
-        return False, False, False
+        return False, False, False, False
 
 
 def scan_ticker(ticker, interval, days_back, strategies, trend_period, son_n, bolge_filtre="Filtre Yok"):
@@ -380,18 +399,22 @@ def scan_ticker(ticker, interval, days_back, strategies, trend_period, son_n, bo
                 signals.append("Pozitif RSI Uyumsuzluğu")
 
         if "EMA Dizilimi" in strategies:
-            bull, cross, pre_cross = check_ema(emas, i)
-            # Sadece yeni başlayanları yakala: EMA5 yeni EMA14'ü kesti veya yaklaşıyor
-            if cross:
-                signals.append("EMA Kesisim [Yeni Basladı]")
+            bull, cross, pre_cross, sikisma = check_ema(emas, i)
+            # Sıkışmadan çıkış - en erken sinyal
+            if sikisma and not cross:
+                signals.append("EMA Sikisma Cikis [Erken]")
+            # EMA5 EMA14'e yaklaşıyor
             if pre_cross:
                 signals.append("EMA Yaklasim [Yakında]")
+            # EMA5 EMA14'ü yeni kesti
+            if cross:
+                signals.append("EMA Kesisim [Yeni Basladı]")
             # Tam dizilim: sadece son 5 mum içinde cross olduysa kabul et
-            if bull and not cross and not pre_cross:
+            if bull and not cross and not pre_cross and not sikisma:
                 recent_cross = False
                 for lookback in range(1, 6):
                     if i - lookback >= 0:
-                        _, lc, _ = check_ema(emas, i - lookback)
+                        _, lc, _, _ = check_ema(emas, i - lookback)
                         if lc:
                             recent_cross = True
                             break
