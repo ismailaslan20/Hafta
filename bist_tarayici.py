@@ -177,78 +177,97 @@ def calc_rsi(closes, period=14):
 
 
 # ─────────────────────────────────────────────
-# PusuV9 Mantığı:
-# MACD çizgisini 0-100 arasına normalize et
-# ADX değerini hesapla
-# Normalize MACD, ADX'i yukarı kestiğinde sinyal ver
-# (Pine kodundaki: ta.crossover(m_n, adx_v))
+# YENİ: Düşeni Kıran Stratejisi
+# Son 20 mum içindeki en yüksek fiyatı (direnci) yukarı kırma
 # ─────────────────────────────────────────────
-def calc_pusu_indicators(closes, df, macd_fast=12, macd_slow=26, macd_sig=9, adx_len=14, norm_period=50):
-    # MACD Hesapla
-    ema_fast = closes.ewm(span=macd_fast, adjust=False, min_periods=1).mean()
-    ema_slow = closes.ewm(span=macd_slow, adjust=False, min_periods=1).mean()
-    macd_line = ema_fast - ema_slow
-
-    # MACD'yi normalize et (0-100 arası) - Pine kodundaki m_n
-    # min_periods=1 sayesinde az barda da çalışır
-    macd_lowest  = macd_line.rolling(norm_period, min_periods=1).min()
-    macd_highest = macd_line.rolling(norm_period, min_periods=1).max()
-    denom = (macd_highest - macd_lowest).replace(0, np.nan)
-    m_n = 100 * (macd_line - macd_lowest) / denom
-    m_n = m_n.fillna(50)
-
-    # ADX Hesapla (Wilder)
-    high  = df["High"].squeeze()
-    low   = df["Low"].squeeze()
-    close = df["Close"].squeeze()
-
-    prev_close = close.shift(1)
-    tr = pd.concat([
-        high - low,
-        (high - prev_close).abs(),
-        (low  - prev_close).abs()
-    ], axis=1).max(axis=1)
-
-    up_move   = high - high.shift(1)
-    down_move = low.shift(1) - low
-
-    plus_dm  = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
-    minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
-
-    plus_dm_s  = pd.Series(plus_dm,  index=close.index).ewm(alpha=1/adx_len, min_periods=1, adjust=False).mean()
-    minus_dm_s = pd.Series(minus_dm, index=close.index).ewm(alpha=1/adx_len, min_periods=1, adjust=False).mean()
-    tr_s       = tr.ewm(alpha=1/adx_len, min_periods=1, adjust=False).mean()
-
-    plus_di  = 100 * plus_dm_s  / tr_s.replace(0, np.nan)
-    minus_di = 100 * minus_dm_s / tr_s.replace(0, np.nan)
-
-    dx  = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan)
-    adx = dx.ewm(alpha=1/adx_len, min_periods=1, adjust=False).mean()
-
-    return m_n, adx, plus_di, minus_di
-
-
-def check_pusu_crossover(m_n, adx, idx):
+def check_duseni_kiran(df, idx, lookback=20):
     """
+    Düşeni Kıran: Fiyat, son N mumdaki en yüksek seviyeyi (direnç) yukarı kırıyor
     Koşullar:
-    1) MACD_N, ADX'i alttan yukarı kesmeli (crossover)
-    2) MACD_N yukarı dönmeli (curr > prev) - boynunu kaldırıyor
-    3) ADX yukarı dönmeli (curr > prev) - boynunu kaldırıyor
+    1. Son lookback mumdaki en yüksek high seviyesini bul (direnç)
+    2. Şimdiki kapanış, bu direncin üzerinde
+    3. Hacim artışı var (önceki mumdan %20+ fazla)
+    4. RSI 50-70 arası (güçlü ama aşırı alım değil)
     """
-    if idx < 2:
+    if idx < lookback + 1:
         return False
-    prev_mn  = float(m_n.iloc[idx - 1])
-    curr_mn  = float(m_n.iloc[idx])
-    prev_adx = float(adx.iloc[idx - 1])
-    curr_adx = float(adx.iloc[idx])
+    
+    try:
+        # Son lookback mumdaki en yüksek seviye (direnç)
+        highs_window = df["High"].iloc[idx - lookback: idx]
+        resistance = float(highs_window.max())
+        
+        # Şimdiki fiyat bilgileri
+        current_close = float(df["Close"].iloc[idx])
+        current_volume = float(df["Volume"].iloc[idx]) if "Volume" in df.columns else 0
+        prev_volume = float(df["Volume"].iloc[idx - 1]) if "Volume" in df.columns else 0
+        
+        # Bir önceki mumun kapanışı direncin altında mıydı?
+        prev_close = float(df["Close"].iloc[idx - 1])
+        
+        # Kırılma koşulları
+        kiriyor = current_close > resistance and prev_close <= resistance * 1.01  # %1 tolerans
+        hacim_artisi = current_volume > prev_volume * 1.2 if prev_volume > 0 else True
+        
+        return kiriyor and hacim_artisi
+    except Exception:
+        return False
 
-    # 1) Crossover: MACD_N alttan yukarı kesti (öncede altında, şimdi üstünde)
-    crossover = (prev_mn < prev_adx) and (curr_mn > curr_adx)
-    # 2) MACD_N yukarı dönmüş (boynunu kaldırdı)
-    macd_yukari = curr_mn > prev_mn
-    # 3) ADX yukarı dönmüş (boynunu kaldırdı)
-    adx_yukari = curr_adx > prev_adx
-    return crossover and macd_yukari and adx_yukari
+
+# ─────────────────────────────────────────────
+# YENİ: Pullback Stratejisi
+# Fiyat yükselişten sonra destek seviyesine (EMA) geri çekilip tekrar yükseliyor
+# ─────────────────────────────────────────────
+def check_pullback(df, emas, rsi, idx, lookback=10):
+    """
+    Pullback: Yükseliş trendinde fiyat EMA'ya geri çekilip tekrar yükseliyor
+    Koşullar:
+    1. Genel trend yükseliş (EMA5 > EMA14 > EMA34)
+    2. Son lookback mum içinde fiyat EMA20'ye yaklaştı veya dokundu
+    3. Şimdiki mum EMA20'nin üstünde kapandı
+    4. RSI 40-60 arası (sağlıklı geri çekilme)
+    5. Şimdiki mum yeşil (kapanış > açılış)
+    """
+    if idx < lookback + 1:
+        return False
+    
+    try:
+        e5  = float(emas[5].iloc[idx])
+        e14 = float(emas[14].iloc[idx])
+        e20 = float(emas[20].iloc[idx])
+        e34 = float(emas[34].iloc[idx])
+        
+        current_close = float(df["Close"].iloc[idx])
+        current_open = float(df["Open"].iloc[idx])
+        current_low = float(df["Low"].iloc[idx])
+        current_rsi = float(rsi.iloc[idx])
+        
+        # 1. Genel trend yükseliş
+        uptrend = e5 > e14 > e34
+        
+        # 2. Son lookback mum içinde EMA20'ye yaklaştı mı?
+        touched_ema = False
+        for i in range(max(0, idx - lookback), idx):
+            low_i = float(df["Low"].iloc[i])
+            close_i = float(df["Close"].iloc[i])
+            ema20_i = float(emas[20].iloc[i])
+            # EMA20'ye %2 içinde yaklaştı veya dokundu
+            if low_i <= ema20_i * 1.02 or close_i <= ema20_i * 1.02:
+                touched_ema = True
+                break
+        
+        # 3. Şimdiki mum EMA20 üstünde kapandı
+        above_ema20 = current_close > e20
+        
+        # 4. RSI sağlıklı aralıkta
+        rsi_healthy = 40 <= current_rsi <= 60
+        
+        # 5. Yeşil mum
+        green_candle = current_close > current_open
+        
+        return uptrend and touched_ema and above_ema20 and rsi_healthy and green_candle
+    except Exception:
+        return False
 
 
 def check_bullish_divergence(closes, rsi, idx, lookback=20):
@@ -272,50 +291,6 @@ def check_bullish_divergence(closes, rsi, idx, lookback=20):
     rsi_oversold     = current_rsi < 50
     return price_lower_low and rsi_higher_low and rsi_oversold
 
-def check_ema(emas, idx, rsi=None):
-    try:
-        e5  = float(emas[5].iloc[idx])
-        e14 = float(emas[14].iloc[idx])
-        e34 = float(emas[34].iloc[idx])
-        e55 = float(emas[55].iloc[idx])
-
-        # Tam dizilim
-        bull = e5 > e14 > e34 > e55
-
-        cross     = False
-        pre_cross = False
-        sikisma   = False
-
-        if idx >= 3:
-            e5_prev1  = float(emas[5].iloc[idx - 1])
-            e5_prev2  = float(emas[5].iloc[idx - 2])
-            e14_prev1 = float(emas[14].iloc[idx - 1])
-            e34_prev1 = float(emas[34].iloc[idx - 1])
-
-            # EMA5 EMA14'ü yeni kesti
-            cross = e5_prev1 < e14_prev1 and e5 > e14
-
-            # EMA5 yukarı gidiyor, henüz kesmedi, yakın
-            ema5_rising = e5 > e5_prev1 > e5_prev2
-            still_below = e5 < e14
-            gap_pct     = (e14 - e5) / e14 * 100
-            pre_cross   = ema5_rising and still_below and gap_pct < 1.5
-
-            # EMA5 hepsinin altında ama yukarı dönmüş - dip dönüş hazırlığı
-            # Fiyat da EMA5 üstünde olmalı (momentum başlamış)
-            e5_altta  = e5 < e14 and e5 < e34 and e5 < e55
-            # İlk yukarı dönüş: bu bar yukarı, önceki bar aşağıydı
-            e5_ilk_donus = e5 > e5_prev1 and e5_prev1 <= e5_prev2
-            # RSI 50-60 arası (patlama öncesi bölge)
-            rsi_idx = float(rsi.iloc[idx]) if rsi is not None else 50
-            rsi_filtre = 45 <= rsi_idx <= 65
-            # MACD_N hesapla (basit: EMA12-EMA26 normalize)
-            sikisma   = e5_altta and e5_ilk_donus and rsi_filtre
-
-        return bull, cross, pre_cross, sikisma
-    except Exception:
-        return False, False, False, False
-
 
 def scan_ticker(ticker, interval, days_back, strategies, trend_period, son_n, bolge_filtre="Filtre Yok"):
     end = datetime.today()
@@ -323,16 +298,13 @@ def scan_ticker(ticker, interval, days_back, strategies, trend_period, son_n, bo
     try:
         df = yf.download(
             ticker, start=start, end=end,
-            interval=interval, progress=False, auto_adjust=True
+            interval=interval, progress=False, auto_adjust=False
         )
     except Exception:
         return []
 
     min_bars = {"1d": 60, "1wk": 30, "1mo": 12}
     min_required = min_bars.get(interval, 30)
-
-    if "PusuV9" in strategies:
-        min_required = max(min_required, 60)
 
     if df is None or df.empty or len(df) < min_required:
         return []
@@ -346,16 +318,14 @@ def scan_ticker(ticker, interval, days_back, strategies, trend_period, son_n, bo
     df["High"]  = df["High"].squeeze()
     df["Low"]   = df["Low"].squeeze()
     df["Close"] = df["Close"].squeeze()
+    if "Volume" in df.columns:
+        df["Volume"] = df["Volume"].squeeze()
+    
     closes = df["Close"]
     emas   = calc_emas(closes)
     rsi    = calc_rsi(closes)
     n      = len(df)
     results = []
-
-    # PusuV9 indikatörlerini hesapla
-    m_n = adx_series = plus_di = minus_di = None
-    if "PusuV9" in strategies:
-        m_n, adx_series, plus_di, minus_di = calc_pusu_indicators(closes, df)
 
     min_ema_warmup = min(55, n - son_n - 1)
 
@@ -406,53 +376,26 @@ def scan_ticker(ticker, interval, days_back, strategies, trend_period, son_n, bo
             if check_bullish_divergence(closes, rsi, i):
                 signals.append("Pozitif RSI Uyumsuzluğu")
 
-        if "EMA Dizilimi" in strategies:
-            bull, cross, pre_cross, sikisma = check_ema(emas, i, rsi)
-            # Sıkışmadan çıkış - en erken sinyal
-            if sikisma and not cross:
-                signals.append("EMA5 Dip Donus Hazir [Erken]")
-            # EMA5 EMA14'e yaklaşıyor
-            if pre_cross:
-                signals.append("EMA Yaklasim [Yakında]")
-            # EMA5 EMA14'ü yeni kesti
-            if cross:
-                signals.append("EMA Kesisim [Yeni Basladı]")
-            # Tam dizilim: sadece son 5 mum içinde cross olduysa kabul et
-            if bull and not cross and not pre_cross and not sikisma:
-                recent_cross = False
-                for lookback in range(1, 6):
-                    if i - lookback >= 0:
-                        _, lc, _, _ = check_ema(emas, i - lookback)
-                        if lc:
-                            recent_cross = True
-                            break
-                if recent_cross:
-                    signals.append("EMA Dizilim [Yeni]")
-
         # ── Golden Cross: EMA50 EMA200'ü yukarı kesiyor, fiyat EMA20 üstünde ──
         if "Golden Cross" in strategies:
             if check_golden_cross(emas, closes, i):
                 signals.append("Golden Cross [EMA50>EMA200 & Fiyat>EMA20]")
-        # ────────────────────────────────────────────────────────────────────
 
-        # ── PusuV9: Normalize MACD, ADX'i yukarı kestiğinde sinyal ──────────
-        if "PusuV9" in strategies and m_n is not None:
-            if check_pusu_crossover(m_n, adx_series, i):
-                mn_val  = round(float(m_n.iloc[i]), 1)
-                adx_val = round(float(adx_series.iloc[i]), 1)
-                signals.append(f"PusuV9 Kesişim [MACD_N:{mn_val} | ADX:{adx_val}]")
-        # ─────────────────────────────────────────────────────────────────────
+        # ── YENİ: Düşeni Kıran ──
+        if "Duseni Kiran" in strategies:
+            if check_duseni_kiran(df, i):
+                resistance = float(df["High"].iloc[i - 20: i].max())
+                signals.append(f"Düşeni Kıran [Direnç: {resistance:.2f}]")
+
+        # ── YENİ: Pullback ──
+        if "Pullback" in strategies:
+            if check_pullback(df, emas, rsi, i):
+                ema20_val = float(emas[20].iloc[i])
+                signals.append(f"Pullback [EMA20: {ema20_val:.2f}]")
 
         if signals:
             e = {p: round(float(emas[p].iloc[i]), 2) for p in [5, 14, 34, 55]}
             hafta_farki = n - 1 - i
-
-            extra = {}
-            if m_n is not None:
-                extra["MACD_N"] = round(float(m_n.iloc[i]), 1)
-                extra["ADX"]    = round(float(adx_series.iloc[i]), 1)
-                extra["+DI"]    = round(float(plus_di.iloc[i]), 1)
-                extra["-DI"]    = round(float(minus_di.iloc[i]), 1)
 
             row = {
                 "Hisse":   ticker.replace(".IS", ""),
@@ -469,18 +412,17 @@ def scan_ticker(ticker, interval, days_back, strategies, trend_period, son_n, bo
                 "_int":    interval,
                 "_days":   days_back,
             }
-            row.update(extra)
             results.append(row)
 
     return results
 
 
-def draw_chart(ticker, interval, days_back, signal_dates, show_pusu=False):
+def draw_chart(ticker, interval, days_back, signal_dates):
     end_dt = datetime.today()
     start_dt = end_dt - timedelta(days=days_back)
     df = yf.download(
         ticker, start=start_dt, end=end_dt,
-        interval=interval, progress=False, auto_adjust=True
+        interval=interval, progress=False, auto_adjust=False
     )
     if df is None or df.empty:
         return
@@ -488,36 +430,30 @@ def draw_chart(ticker, interval, days_back, signal_dates, show_pusu=False):
         df.columns = df.columns.get_level_values(0)
 
     closes = df["Close"].squeeze()
+    df["Open"]  = df["Open"].squeeze()
+    df["High"]  = df["High"].squeeze()
+    df["Low"]   = df["Low"].squeeze()
+    df["Close"] = df["Close"].squeeze()
+    
     emas   = calc_emas(closes)
     rsi    = calc_rsi(closes)
 
     from plotly.subplots import make_subplots
 
-    if show_pusu:
-        # 3 panel: Mum | PusuV9 (MACD_N vs ADX) | RSI
-        fig = make_subplots(
-            rows=3, cols=1,
-            shared_xaxes=True,
-            row_heights=[0.55, 0.25, 0.20],
-            vertical_spacing=0.03,
-            subplot_titles=("", "PusuV9 (Norm.MACD vs ADX)", "RSI 14"),
-        )
-        m_n, adx_series, plus_di, minus_di = calc_pusu_indicators(closes, df)
-    else:
-        fig = make_subplots(
-            rows=2, cols=1,
-            shared_xaxes=True,
-            row_heights=[0.68, 0.32],
-            vertical_spacing=0.03,
-        )
+    fig = make_subplots(
+        rows=2, cols=1,
+        shared_xaxes=True,
+        row_heights=[0.68, 0.32],
+        vertical_spacing=0.03,
+    )
 
     # Mum grafiği
     fig.add_trace(
         go.Candlestick(
             x=list(range(len(df))),
-            open=df["Open"].squeeze().tolist(),
-            high=df["High"].squeeze().tolist(),
-            low=df["Low"].squeeze().tolist(),
+            open=df["Open"].tolist(),
+            high=df["High"].tolist(),
+            low=df["Low"].tolist(),
             close=closes.tolist(),
             name=ticker,
             increasing_line_color="#00d4aa",
@@ -528,7 +464,7 @@ def draw_chart(ticker, interval, days_back, signal_dates, show_pusu=False):
         row=1, col=1,
     )
 
-    colors = {5: "#ffd166", 14: "#0099ff", 34: "#ff6b6b", 55: "#cc88ff"}
+    colors = {5: "#ffd166", 14: "#0099ff", 20: "#00d4aa", 34: "#ff6b6b", 55: "#cc88ff"}
     for p, col in colors.items():
         fig.add_trace(
             go.Scatter(
@@ -540,10 +476,53 @@ def draw_chart(ticker, interval, days_back, signal_dates, show_pusu=False):
             row=1, col=1,
         )
 
+    # Düşeni Kıran ve Pullback sinyal işaretleri
     for sd in signal_dates:
         try:
             ts  = pd.Timestamp(sd)
             pos = df.index.get_loc(ts)
+            
+            # Düşeni Kıran: Son 20 mumdaki en yüksek direnci çiz
+            if pos >= 20:
+                lookback_start = max(0, pos - 20)
+                resistance = float(df["High"].iloc[lookback_start:pos].max())
+                
+                # Direnç çizgisi (kırmızı kesikli)
+                fig.add_shape(
+                    type="line",
+                    x0=lookback_start, x1=pos,
+                    y0=resistance, y1=resistance,
+                    line=dict(color="#ff6b6b", width=2, dash="dash"),
+                    row=1, col=1,
+                )
+                
+                # Direnç etiketi
+                fig.add_annotation(
+                    x=pos - 10, y=resistance,
+                    text=f"Direnç: {resistance:.2f}",
+                    showarrow=False,
+                    font=dict(color="#ff6b6b", size=10),
+                    bgcolor="rgba(0,0,0,0.5)",
+                    row=1, col=1,
+                )
+            
+            # Pullback: EMA20'ye dokunma bölgesini vurgula
+            if pos >= 10:
+                lookback_start = max(0, pos - 10)
+                ema20_val = float(emas[20].iloc[pos])
+                
+                # EMA20 geri çekilme bölgesini yeşil arka plan ile vurgula
+                for i in range(lookback_start, pos):
+                    low_i = float(df["Low"].iloc[i])
+                    if low_i <= ema20_val * 1.02:  # EMA20'ye %2 içinde yaklaştı
+                        fig.add_vrect(
+                            x0=i-0.5, x1=i+0.5,
+                            fillcolor="rgba(0, 212, 170, 0.1)",
+                            line_width=0,
+                            row=1, col=1,
+                        )
+            
+            # Sinyal ok işareti
             low_val = float(df["Low"].iloc[pos]) * 0.98
             fig.add_annotation(
                 x=pos, y=low_val,
@@ -555,83 +534,23 @@ def draw_chart(ticker, interval, days_back, signal_dates, show_pusu=False):
         except Exception:
             pass
 
-    if show_pusu:
-        # PusuV9 paneli: Normalize MACD (yeşil/kırmızı) ve ADX (mor)
-        mn_colors = ["#00d4aa" if float(m_n.iloc[j]) > float(m_n.iloc[j-1]) else "#ff6b6b"
-                     for j in range(len(m_n))]
-        fig.add_trace(
-            go.Scatter(
-                x=list(range(len(df))),
-                y=m_n.tolist(),
-                name="MACD Norm",
-                line=dict(color="#00d4aa", width=2),
-            ),
-            row=2, col=1,
-        )
-        fig.add_trace(
-            go.Scatter(
-                x=list(range(len(df))),
-                y=adx_series.tolist(),
-                name="ADX",
-                line=dict(color="#cc88ff", width=2),
-            ),
-            row=2, col=1,
-        )
-
-        # Kesişim noktalarını işaretle
-        cross_x = []
-        cross_y = []
-        for j in range(1, len(m_n)):
-            prev_mn  = float(m_n.iloc[j - 1])
-            curr_mn  = float(m_n.iloc[j])
-            prev_adx = float(adx_series.iloc[j - 1])
-            curr_adx = float(adx_series.iloc[j])
-            if (prev_mn <= prev_adx) and (curr_mn > curr_adx):
-                cross_x.append(j)
-                cross_y.append(curr_mn)
-
-        if cross_x:
-            fig.add_trace(
-                go.Scatter(
-                    x=cross_x,
-                    y=cross_y,
-                    mode="markers",
-                    name="Kesişim",
-                    marker=dict(symbol="triangle-up", size=12, color="#ffd166"),
-                ),
-                row=2, col=1,
-            )
-
-        # RSI paneli
-        fig.add_trace(
-            go.Scatter(
-                x=list(range(len(df))),
-                y=rsi.tolist(),
-                name="RSI 14",
-                line=dict(color="#a78bfa", width=1.5),
-            ),
-            row=3, col=1,
-        )
-        fig.add_hline(y=70, line=dict(color="#ff6b6b", width=1, dash="dash"), row=3, col=1)
-        fig.add_hline(y=30, line=dict(color="#00d4aa", width=1, dash="dash"), row=3, col=1)
-    else:
-        fig.add_trace(
-            go.Scatter(
-                x=list(range(len(df))),
-                y=rsi.tolist(),
-                name="RSI 14",
-                line=dict(color="#a78bfa", width=1.5),
-            ),
-            row=2, col=1,
-        )
-        fig.add_hline(y=70, line=dict(color="#ff6b6b", width=1, dash="dash"), row=2, col=1)
-        fig.add_hline(y=30, line=dict(color="#00d4aa", width=1, dash="dash"), row=2, col=1)
+    # RSI paneli
+    fig.add_trace(
+        go.Scatter(
+            x=list(range(len(df))),
+            y=rsi.tolist(),
+            name="RSI 14",
+            line=dict(color="#a78bfa", width=1.5),
+        ),
+        row=2, col=1,
+    )
+    fig.add_hline(y=70, line=dict(color="#ff6b6b", width=1, dash="dash"), row=2, col=1)
+    fig.add_hline(y=30, line=dict(color="#00d4aa", width=1, dash="dash"), row=2, col=1)
 
     step   = max(1, len(df) // 10)
     tvals  = list(range(0, len(df), step))
     tlabels = [df.index[i].strftime("%Y-%m-%d") for i in tvals]
 
-    height = 750 if show_pusu else 620
     fig.update_layout(
         paper_bgcolor="#0a0e1a",
         plot_bgcolor="#111827",
@@ -642,13 +561,9 @@ def draw_chart(ticker, interval, days_back, signal_dates, show_pusu=False):
         yaxis2=dict(gridcolor="#1e2d40"),
         legend=dict(bgcolor="#111827", bordercolor="#1e2d40", borderwidth=1),
         margin=dict(l=10, r=10, t=30, b=10),
-        height=height,
+        height=620,
     )
-    if show_pusu:
-        fig.update_layout(xaxis3=dict(gridcolor="#1e2d40", tickmode="array", tickvals=tvals, ticktext=tlabels))
-        fig.update_yaxes(range=[0, 100], row=3, col=1)
-    else:
-        fig.update_yaxes(range=[0, 100], row=2, col=1)
+    fig.update_yaxes(range=[0, 100], row=2, col=1)
 
     st.plotly_chart(fig, use_container_width=True)
 
@@ -671,8 +586,8 @@ with st.sidebar:
     strategies = st.multiselect(
         "Stratejiler",
         ["Cekic", "Yutan", "Sabah Yildizi", "Three Inside Up",
-         "RSI Uyumsuzlugu", "EMA Dizilimi", "PusuV9", "Golden Cross"],
-        default=["PusuV9"],
+         "RSI Uyumsuzlugu", "Golden Cross", "Duseni Kiran", "Pullback"],
+        default=["Duseni Kiran", "Pullback"],
     )
     hisse_sec = st.multiselect(
         "Hisse filtresi (bos=tumu):",
@@ -683,14 +598,12 @@ with st.sidebar:
     btn = st.button("TARAMAYI BASLAT")
     st.caption(str(len(HISSELER)) + " hisse listede")
 
-    if "PusuV9" in strategies:
-        st.info(
-            "**PusuV9 Kesişim**\n\n"
-            "Normalize MACD (12/26/9), ADX'i\n"
-            "yukarı kestiğinde sinyal verir.\n\n"
-            "Grafik panelinde yeşil = MACD_N\n"
-            "mor = ADX, sarı üçgen = kesişim"
-        )
+    st.markdown("---")
+    st.info(
+        "**Yeni Stratejiler:**\n\n"
+        "🔥 **Düşeni Kıran**: Son 20 mumdaki en yüksek seviyeyi (direnç) yukarı kırma. Hacim artışı ile doğrulanır.\n\n"
+        "📉 **Pullback**: Yükseliş trendinde fiyat EMA20'ye geri çekilip tekrar yükseliyor. Sağlıklı düzeltme fırsatı."
+    )
 
 st.markdown("# BIST Formasyon Tarayici")
 st.markdown("Periyot: " + periyot + " | Stratejiler: " + (", ".join(strategies) if strategies else "-"))
@@ -764,9 +677,7 @@ if st.session_state.done:
         if fz:
             df_show = df_show[df_show["Zaman"].isin(fz)]
 
-        base_cols = ["Hisse", "Tarih", "Sinyal", "Kapanis", "RSI14", "EMA5", "EMA14", "EMA34", "EMA55", "Zaman"]
-        extra_cols = [c for c in ["MACD_N", "ADX", "+DI", "-DI"] if c in df_show.columns]
-        show_cols = base_cols + extra_cols
+        show_cols = ["Hisse", "Tarih", "Sinyal", "Kapanis", "RSI14", "EMA5", "EMA14", "EMA34", "EMA55", "Zaman"]
 
         st.markdown("### Sonuclar: " + str(len(df_show)) + " sinyal")
         st.dataframe(
@@ -790,8 +701,7 @@ if st.session_state.done:
             ticker_f = secim + ".IS"
             dates = df_show[df_show["Hisse"] == secim]["Tarih"].tolist()
 
-            show_pusu_panel = "PusuV9" in strategies
-            draw_chart(ticker_f, interval, days_back, dates, show_pusu=show_pusu_panel)
+            draw_chart(ticker_f, interval, days_back, dates)
 
             row = df_show[df_show["Hisse"] == secim].iloc[0]
             e1, e2, e3, e4 = st.columns(4)
@@ -803,16 +713,5 @@ if st.session_state.done:
                 st.metric("EMA 34", row["EMA34"])
             with e4:
                 st.metric("EMA 55", row["EMA55"])
-
-            if "ADX" in row and pd.notna(row.get("ADX")):
-                m1, m2, m3, m4 = st.columns(4)
-                with m1:
-                    st.metric("MACD Norm", row.get("MACD_N", "-"))
-                with m2:
-                    st.metric("ADX", row.get("ADX", "-"))
-                with m3:
-                    st.metric("+DI", row.get("+DI", "-"))
-                with m4:
-                    st.metric("-DI", row.get("-DI", "-"))
 else:
     st.info("Sol panelden periyot ve strateji sec, ardından TARAMAYI BASLAT butonuna bas.")
