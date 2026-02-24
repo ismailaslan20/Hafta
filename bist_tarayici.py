@@ -215,20 +215,21 @@ def check_duseni_kiran(df, idx, lookback=20):
 
 
 # ─────────────────────────────────────────────
-# YENİ: Pullback Stratejisi
+# YENİ: Pullback Stratejisi (Pine Script Uyumlu)
 # Fiyat yükselişten sonra destek seviyesine (EMA) geri çekilip tekrar yükseliyor
 # ─────────────────────────────────────────────
-def check_pullback(df, emas, rsi, idx, lookback=10):
+def check_pullback(df, emas, rsi, idx, lookback=10, tolerance=2.0, rsi_min=40, rsi_max=60):
     """
     Pullback: Yükseliş trendinde fiyat EMA'ya geri çekilip tekrar yükseliyor
-    Koşullar:
+    Pine Script ile tam uyumlu koşullar:
     1. Genel trend yükseliş (EMA5 > EMA14 > EMA34)
-    2. Son lookback mum içinde fiyat EMA20'ye yaklaştı veya dokundu
+    2. Son lookback mum içinde fiyat EMA20'ye yaklaştı veya dokundu (tolerance % içinde)
     3. Şimdiki mum EMA20'nin üstünde kapandı
-    4. RSI 40-60 arası (sağlıklı geri çekilme)
+    4. RSI sağlıklı aralıkta (40-60 arası, ayarlanabilir)
     5. Şimdiki mum yeşil (kapanış > açılış)
+    6. Hacim artışı var (son 20 mumun ortalamasının üstünde)
     """
-    if idx < lookback + 1:
+    if idx < max(lookback, 20) + 1:
         return False
     
     try:
@@ -242,32 +243,48 @@ def check_pullback(df, emas, rsi, idx, lookback=10):
         current_low = float(df["Low"].iloc[idx])
         current_rsi = float(rsi.iloc[idx])
         
-        # 1. Genel trend yükseliş
+        # 1. Genel trend yükseliş (EMA dizilimi)
         uptrend = e5 > e14 > e34
         
-        # 2. Son lookback mum içinde EMA20'ye yaklaştı mı?
+        # 2. Son lookback mum içinde EMA20'ye yaklaştı mı? (tolerance % içinde)
         touched_ema = False
+        min_distance = float('inf')
         for i in range(max(0, idx - lookback), idx):
             low_i = float(df["Low"].iloc[i])
             close_i = float(df["Close"].iloc[i])
             ema20_i = float(emas[20].iloc[i])
-            # EMA20'ye %2 içinde yaklaştı veya dokundu
-            if low_i <= ema20_i * 1.02 or close_i <= ema20_i * 1.02:
+            threshold = ema20_i * (1 + tolerance / 100)
+            
+            # EMA20'ye tolerance % içinde yaklaştı
+            if low_i <= threshold or close_i <= threshold:
                 touched_ema = True
-                break
+                distance = min(abs(low_i - ema20_i), abs(close_i - ema20_i))
+                min_distance = min(min_distance, distance)
         
         # 3. Şimdiki mum EMA20 üstünde kapandı
         above_ema20 = current_close > e20
+        distance_from_ema20 = ((current_close - e20) / e20) * 100
         
-        # 4. RSI sağlıklı aralıkta
-        rsi_healthy = 40 <= current_rsi <= 60
+        # 4. RSI sağlıklı aralıkta (ayarlanabilir)
+        rsi_healthy = rsi_min <= current_rsi <= rsi_max
         
         # 5. Yeşil mum
         green_candle = current_close > current_open
         
-        return uptrend and touched_ema and above_ema20 and rsi_healthy and green_candle
+        # 6. Hacim kontrolü (eğer Volume verisi varsa)
+        volume_increase = True
+        if "Volume" in df.columns:
+            current_volume = float(df["Volume"].iloc[idx])
+            avg_volume = df["Volume"].iloc[idx - 20: idx].mean()
+            volume_increase = current_volume > avg_volume
+        
+        # Tüm koşullar sağlanıyor mu?
+        pullback_confirmed = (uptrend and touched_ema and above_ema20 and 
+                             rsi_healthy and green_candle and volume_increase)
+        
+        return pullback_confirmed, distance_from_ema20, min_distance
     except Exception:
-        return False
+        return False, 0, 0
 
 
 def check_bullish_divergence(closes, rsi, idx, lookback=20):
@@ -292,7 +309,9 @@ def check_bullish_divergence(closes, rsi, idx, lookback=20):
     return price_lower_low and rsi_higher_low and rsi_oversold
 
 
-def scan_ticker(ticker, interval, days_back, strategies, trend_period, son_n, bolge_filtre="Filtre Yok"):
+def scan_ticker(ticker, interval, days_back, strategies, trend_period, son_n, bolge_filtre="Filtre Yok", 
+                pullback_lookback=10, pullback_tolerance=2.0, pullback_rsi_min=40, pullback_rsi_max=60,
+                resistance_lookback=20, min_volume_increase=20):
     end = datetime.today()
     start = end - timedelta(days=days_back)
     try:
@@ -383,15 +402,21 @@ def scan_ticker(ticker, interval, days_back, strategies, trend_period, son_n, bo
 
         # ── YENİ: Düşeni Kıran ──
         if "Duseni Kiran" in strategies:
-            if check_duseni_kiran(df, i):
-                resistance = float(df["High"].iloc[i - 20: i].max())
+            if check_duseni_kiran(df, i, lookback=resistance_lookback):
+                resistance = float(df["High"].iloc[max(0, i - resistance_lookback): i].max())
                 signals.append(f"Düşeni Kıran [Direnç: {resistance:.2f}]")
 
         # ── YENİ: Pullback ──
         if "Pullback" in strategies:
-            if check_pullback(df, emas, rsi, i):
+            pb_result = check_pullback(df, emas, rsi, i, 
+                                      lookback=pullback_lookback,
+                                      tolerance=pullback_tolerance,
+                                      rsi_min=pullback_rsi_min,
+                                      rsi_max=pullback_rsi_max)
+            if pb_result[0]:  # pullback_confirmed
                 ema20_val = float(emas[20].iloc[i])
-                signals.append(f"Pullback [EMA20: {ema20_val:.2f}]")
+                distance_pct = pb_result[1]
+                signals.append(f"Pullback [EMA20: {ema20_val:.2f}, Mesafe: {distance_pct:.1f}%]")
 
         if signals:
             e = {p: round(float(emas[p].iloc[i]), 2) for p in [5, 14, 34, 55]}
@@ -583,6 +608,26 @@ with st.sidebar:
         index=0,
     )
     st.markdown("---")
+    
+    # Pullback Parametreleri
+    with st.expander("⚙️ Pullback Ayarları", expanded=False):
+        pullback_lookback = st.slider("Pullback Arama Periyodu", 5, 20, 10, 
+                                       help="Son kaç mumda EMA20'ye yaklaşma aranacak")
+        pullback_tolerance = st.slider("EMA20 Tolerans (%)", 0.5, 5.0, 2.0, 0.5,
+                                        help="EMA20'ye ne kadar yaklaşma kabul edilecek")
+        pullback_rsi_min = st.slider("RSI Min", 30, 50, 40,
+                                      help="Pullback için minimum RSI değeri")
+        pullback_rsi_max = st.slider("RSI Max", 50, 70, 60,
+                                      help="Pullback için maksimum RSI değeri")
+    
+    # Düşeni Kıran Parametreleri
+    with st.expander("⚙️ Düşeni Kıran Ayarları", expanded=False):
+        resistance_lookback = st.slider("Direnç Arama Periyodu", 10, 30, 20,
+                                         help="Son kaç mumdaki en yüksek seviye direnç olacak")
+        min_volume_increase = st.slider("Min Hacim Artışı (%)", 10, 50, 20,
+                                         help="Kırılma için minimum hacim artışı")
+    
+    st.markdown("---")
     strategies = st.multiselect(
         "Stratejiler",
         ["Cekic", "Yutan", "Sabah Yildizi", "Three Inside Up",
@@ -601,8 +646,9 @@ with st.sidebar:
     st.markdown("---")
     st.info(
         "**Yeni Stratejiler:**\n\n"
-        "🔥 **Düşeni Kıran**: Son 20 mumdaki en yüksek seviyeyi (direnç) yukarı kırma. Hacim artışı ile doğrulanır.\n\n"
-        "📉 **Pullback**: Yükseliş trendinde fiyat EMA20'ye geri çekilip tekrar yükseliyor. Sağlıklı düzeltme fırsatı."
+        "🔥 **Düşeni Kıran**: Son N mumdaki en yüksek seviyeyi (direnç) yukarı kırma. Hacim artışı ile doğrulanır.\n\n"
+        "📉 **Pullback**: Yükseliş trendinde fiyat EMA20'ye geri çekilip tekrar yükseliyor. Sağlıklı düzeltme fırsatı.\n\n"
+        "⚙️ **Pine Script Uyumlu**: TradingView ile aynı mantık ve parametreler. Ayarları yukarıdan özelleştirebilirsin!"
     )
 
 st.markdown("# BIST Formasyon Tarayici")
@@ -633,7 +679,13 @@ if btn:
         for i, ticker in enumerate(taranacak):
             durum.caption("Taraniyor: " + ticker)
             prog.progress((i + 1) / len(taranacak))
-            rows = scan_ticker(ticker, interval, days_back, strategies, trend_per, son_n, st.session_state.bolge_filtre)
+            rows = scan_ticker(ticker, interval, days_back, strategies, trend_per, son_n, st.session_state.bolge_filtre,
+                             pullback_lookback=pullback_lookback,
+                             pullback_tolerance=pullback_tolerance,
+                             pullback_rsi_min=pullback_rsi_min,
+                             pullback_rsi_max=pullback_rsi_max,
+                             resistance_lookback=resistance_lookback,
+                             min_volume_increase=min_volume_increase)
             all_res.extend(rows)
             sayi.markdown("Bulunan sinyal: " + str(len(all_res)))
             if (i + 1) % 25 == 0:
