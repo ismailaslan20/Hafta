@@ -6,23 +6,46 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import time
 
-st.set_page_config(page_title="BIST Tarayıcı", page_icon="📊", layout="wide")
+st.set_page_config(page_title="BIST Tarayici", page_icon="📊", layout="wide")
 
 st.markdown("""
 <style>
-.stApp { background: #0a0e1a; color: #e2e8f0; }
-section[data-testid="stSidebar"] { background: #111827; }
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+.stApp { background: #f0f4f8; color: #1a202c; font-family: 'Inter', sans-serif; }
+section[data-testid="stSidebar"] { background: #ffffff; border-right: 1px solid #e2e8f0; }
+section[data-testid="stSidebar"] * { color: #2d3748 !important; }
+
 .stButton > button {
-    background: linear-gradient(135deg, #00d4aa, #0099ff);
-    color: #0a0e1a; border: none; border-radius: 8px;
+    background: linear-gradient(135deg, #0099ff, #00d4aa);
+    color: #ffffff; border: none; border-radius: 8px;
     font-weight: 700; width: 100%; padding: 0.7rem;
+    font-size: 0.95rem; letter-spacing: 0.5px;
 }
-.metric-box {
-    background: #111827; border: 1px solid #1e2d40;
-    border-radius: 12px; padding: 1rem 1.5rem; margin-bottom: 0.8rem;
+.stButton > button:hover {
+    background: linear-gradient(135deg, #0077cc, #00b389);
+    transform: translateY(-1px);
 }
-.metric-label { font-size: 0.75rem; color: #64748b; text-transform: uppercase; }
-.metric-value { font-size: 1.6rem; font-weight: 700; color: #00d4aa; }
+
+.stDataFrame { background: #ffffff; border-radius: 10px; }
+.stMetric { background: #ffffff; border-radius: 10px; padding: 1rem; border: 1px solid #e2e8f0; }
+
+div[data-testid="stMetricValue"] { color: #0099ff !important; font-weight: 700; }
+div[data-testid="stMetricLabel"] { color: #64748b !important; }
+
+.stSelectbox > div, .stMultiSelect > div { background: #ffffff; border-radius: 8px; }
+.stSlider > div { color: #2d3748; }
+.stExpander { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 10px; }
+
+h1, h2, h3 { color: #1a202c !important; }
+.stMarkdown p { color: #4a5568; }
+
+.ema-badge {
+    display: inline-block;
+    padding: 2px 8px; border-radius: 4px;
+    font-size: 0.75rem; font-weight: 600;
+    margin: 2px;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -68,10 +91,14 @@ HISSELER = [
 ]
 
 PERIYOT_MAP = {
-    "Günlük":   ("1d",  90),
-    "Haftalık": ("1wk", 365),
-    "Aylık":    ("1mo", 1460),
+    "Gunluk":   ("1d",  90),
+    "Haftalik": ("1wk", 365),
+    "Aylik":    ("1mo", 1460),
 }
+
+# ═══════════════════════════════════════════════════════════
+# MEVCUT FONKSİYONLAR (degistirilmedi)
+# ═══════════════════════════════════════════════════════════
 
 def calc_emas(closes, n=None):
     return {p: closes.ewm(span=p, adjust=False, min_periods=1).mean() for p in [5, 14, 20, 34, 50, 55, 200]}
@@ -82,13 +109,6 @@ def is_downtrend(closes, idx, period):
     return float(closes.iloc[idx - period]) > float(closes.iloc[idx - 1])
 
 def check_bolge(closes, emas, rsi, idx, bolge):
-    """
-    Bölge filtresi:
-    - Dip     : RSI < 45 ve fiyat EMA55 altında
-    - Trend Devamı : EMA5 > EMA14 > EMA34 (yukarı dizilim)
-    - İkisi de: her iki koşul da sağlanmalı
-    - Filtre Yok: her zaman True
-    """
     if bolge == "Filtre Yok":
         return True
     try:
@@ -98,15 +118,13 @@ def check_bolge(closes, emas, rsi, idx, bolge):
         e34  = float(emas[34].iloc[idx])
         e55  = float(emas[55].iloc[idx])
         rsi_val = float(rsi.iloc[idx])
-
         dip_kosul   = rsi_val < 45 and c < e55
         trend_kosul = e5 > e14 > e34
-
-        if bolge == "Dip Bölgesi":
+        if bolge == "Dip Bolgesi":
             return dip_kosul
-        elif bolge == "Trend Devamı":
+        elif bolge == "Trend Devami":
             return trend_kosul
-        elif bolge == "İkisi de":
+        elif bolge == "Ikisi de":
             return dip_kosul or trend_kosul
         return True
     except Exception:
@@ -157,10 +175,7 @@ def check_golden_cross(emas, closes, idx):
         e50_prev  = float(emas[50].iloc[idx - 1])
         e200_prev = float(emas[200].iloc[idx - 1])
         c = float(closes.iloc[idx])
-
-        # EMA50 EMA200'ü yukarı kesti
         cross = (e50_prev < e200_prev) and (e50 > e200)
-        # Fiyat EMA20 üstünde
         fiyat_ema20_ustu = c > e20
         return cross and fiyat_ema20_ustu
     except Exception:
@@ -175,117 +190,59 @@ def calc_rsi(closes, period=14):
     rs = avg_gain / avg_loss.replace(0, np.nan)
     return 100 - (100 / (1 + rs))
 
-
-# ─────────────────────────────────────────────
-# YENİ: Düşeni Kıran Stratejisi
-# Son 20 mum içindeki en yüksek fiyatı (direnci) yukarı kırma
-# ─────────────────────────────────────────────
 def check_duseni_kiran(df, idx, lookback=20):
-    """
-    Düşeni Kıran: Fiyat, son N mumdaki en yüksek seviyeyi (direnç) yukarı kırıyor
-    Koşullar:
-    1. Son lookback mumdaki en yüksek high seviyesini bul (direnç)
-    2. Şimdiki kapanış, bu direncin üzerinde
-    3. Hacim artışı var (önceki mumdan %20+ fazla)
-    4. RSI 50-70 arası (güçlü ama aşırı alım değil)
-    """
     if idx < lookback + 1:
         return False
-    
     try:
-        # Son lookback mumdaki en yüksek seviye (direnç)
         highs_window = df["High"].iloc[idx - lookback: idx]
         resistance = float(highs_window.max())
-        
-        # Şimdiki fiyat bilgileri
         current_close = float(df["Close"].iloc[idx])
         current_volume = float(df["Volume"].iloc[idx]) if "Volume" in df.columns else 0
         prev_volume = float(df["Volume"].iloc[idx - 1]) if "Volume" in df.columns else 0
-        
-        # Bir önceki mumun kapanışı direncin altında mıydı?
         prev_close = float(df["Close"].iloc[idx - 1])
-        
-        # Kırılma koşulları
-        kiriyor = current_close > resistance and prev_close <= resistance * 1.01  # %1 tolerans
+        kiriyor = current_close > resistance and prev_close <= resistance * 1.01
         hacim_artisi = current_volume > prev_volume * 1.2 if prev_volume > 0 else True
-        
         return kiriyor and hacim_artisi
     except Exception:
         return False
 
-
-# ─────────────────────────────────────────────
-# YENİ: Pullback Stratejisi (Pine Script Uyumlu)
-# Fiyat yükselişten sonra destek seviyesine (EMA) geri çekilip tekrar yükseliyor
-# ─────────────────────────────────────────────
 def check_pullback(df, emas, rsi, idx, lookback=10, tolerance=2.0, rsi_min=40, rsi_max=60):
-    """
-    Pullback: Yükseliş trendinde fiyat EMA'ya geri çekilip tekrar yükseliyor
-    Pine Script ile tam uyumlu koşullar:
-    1. Genel trend yükseliş (EMA5 > EMA14 > EMA34)
-    2. Son lookback mum içinde fiyat EMA20'ye yaklaştı veya dokundu (tolerance % içinde)
-    3. Şimdiki mum EMA20'nin üstünde kapandı
-    4. RSI sağlıklı aralıkta (40-60 arası, ayarlanabilir)
-    5. Şimdiki mum yeşil (kapanış > açılış)
-    6. Hacim artışı var (son 20 mumun ortalamasının üstünde)
-    """
     if idx < max(lookback, 20) + 1:
-        return False
-    
+        return False, 0, 0
     try:
         e5  = float(emas[5].iloc[idx])
         e14 = float(emas[14].iloc[idx])
         e20 = float(emas[20].iloc[idx])
         e34 = float(emas[34].iloc[idx])
-        
         current_close = float(df["Close"].iloc[idx])
-        current_open = float(df["Open"].iloc[idx])
-        current_low = float(df["Low"].iloc[idx])
-        current_rsi = float(rsi.iloc[idx])
-        
-        # 1. Genel trend yükseliş (EMA dizilimi)
+        current_open  = float(df["Open"].iloc[idx])
+        current_rsi   = float(rsi.iloc[idx])
         uptrend = e5 > e14 > e34
-        
-        # 2. Son lookback mum içinde EMA20'ye yaklaştı mı? (tolerance % içinde)
         touched_ema = False
         min_distance = float('inf')
         for i in range(max(0, idx - lookback), idx):
-            low_i = float(df["Low"].iloc[i])
+            low_i   = float(df["Low"].iloc[i])
             close_i = float(df["Close"].iloc[i])
             ema20_i = float(emas[20].iloc[i])
             threshold = ema20_i * (1 + tolerance / 100)
-            
-            # EMA20'ye tolerance % içinde yaklaştı
             if low_i <= threshold or close_i <= threshold:
                 touched_ema = True
                 distance = min(abs(low_i - ema20_i), abs(close_i - ema20_i))
                 min_distance = min(min_distance, distance)
-        
-        # 3. Şimdiki mum EMA20 üstünde kapandı
         above_ema20 = current_close > e20
         distance_from_ema20 = ((current_close - e20) / e20) * 100
-        
-        # 4. RSI sağlıklı aralıkta (ayarlanabilir)
         rsi_healthy = rsi_min <= current_rsi <= rsi_max
-        
-        # 5. Yeşil mum
         green_candle = current_close > current_open
-        
-        # 6. Hacim kontrolü (eğer Volume verisi varsa)
         volume_increase = True
         if "Volume" in df.columns:
             current_volume = float(df["Volume"].iloc[idx])
             avg_volume = df["Volume"].iloc[idx - 20: idx].mean()
             volume_increase = current_volume > avg_volume
-        
-        # Tüm koşullar sağlanıyor mu?
-        pullback_confirmed = (uptrend and touched_ema and above_ema20 and 
+        pullback_confirmed = (uptrend and touched_ema and above_ema20 and
                              rsi_healthy and green_candle and volume_increase)
-        
         return pullback_confirmed, distance_from_ema20, min_distance
     except Exception:
         return False, 0, 0
-
 
 def check_bullish_divergence(closes, rsi, idx, lookback=20):
     if idx < lookback + 1:
@@ -294,8 +251,8 @@ def check_bullish_divergence(closes, rsi, idx, lookback=20):
     window_rsi    = rsi.iloc[idx - lookback: idx + 1]
     if window_rsi.isna().any():
         return False
-    current_low  = float(closes.iloc[idx])
-    current_rsi  = float(rsi.iloc[idx])
+    current_low = float(closes.iloc[idx])
+    current_rsi = float(rsi.iloc[idx])
     prev_window_closes = window_closes.iloc[:-1]
     prev_low_label = prev_window_closes.idxmin()
     prev_low_pos   = closes.index.get_loc(prev_low_label)
@@ -303,28 +260,92 @@ def check_bullish_divergence(closes, rsi, idx, lookback=20):
         return False
     prev_low = float(closes.iloc[prev_low_pos])
     prev_rsi = float(rsi.iloc[prev_low_pos])
-    price_lower_low  = current_low  < prev_low
-    rsi_higher_low   = current_rsi  > prev_rsi
-    rsi_oversold     = current_rsi < 50
+    price_lower_low = current_low  < prev_low
+    rsi_higher_low  = current_rsi  > prev_rsi
+    rsi_oversold    = current_rsi < 50
     return price_lower_low and rsi_higher_low and rsi_oversold
 
+# ═══════════════════════════════════════════════════════════
+# YENİ: EMA14/21 x SMA50 TARAMA FONKSİYONU
+# ═══════════════════════════════════════════════════════════
 
-def scan_ticker(ticker, interval, days_back, strategies, trend_period, son_n, bolge_filtre="Filtre Yok", 
-                pullback_lookback=10, pullback_tolerance=2.0, pullback_rsi_min=40, pullback_rsi_max=60,
+def tarama_ema_sma(df_dict, ema1_len=14, ema2_len=21, sma_len=50, uzaklasma_pct=3.0, bar_limit=3):
+    yukari = []
+    asagi  = []
+
+    for sembol, df in df_dict.items():
+        try:
+            close = df["Close"].squeeze().astype(float)
+            if len(close) < sma_len + 5:
+                continue
+
+            e1  = close.ewm(span=ema1_len, adjust=False).mean()
+            e2  = close.ewm(span=ema2_len, adjust=False).mean()
+            s50 = close.rolling(window=sma_len).mean()
+
+            for i in range(1, bar_limit + 1):
+                once   = float(e1.iloc[-i-1])
+                sonra  = float(e1.iloc[-i])
+                once2  = float(e2.iloc[-i-1])
+                sonra2 = float(e2.iloc[-i])
+
+                # Yukari kesisme
+                if once < once2 and sonra > sonra2:
+                    son_fiyat = float(close.iloc[-1])
+                    son_sma50 = float(s50.iloc[-1])
+                    son_e1    = float(e1.iloc[-1])
+                    son_e2    = float(e2.iloc[-1])
+                    uzaklik   = abs(son_e1 - son_sma50) / son_sma50 * 100
+                    yukari.append({
+                        "Sembol"     : sembol,
+                        "Fiyat"      : round(son_fiyat, 2),
+                        "EMA"+ str(ema1_len): round(son_e1, 2),
+                        "EMA"+ str(ema2_len): round(son_e2, 2),
+                        "SMA"+ str(sma_len) : round(son_sma50, 2),
+                        "Uzaklik_%"  : round(uzaklik, 2),
+                        "Kesisme_Bar": i,
+                        "Durum"      : "YUKARI KESIS" if uzaklik <= uzaklasma_pct else "UZAK (%" + str(round(uzaklik,1)) + ")",
+                    })
+                    break
+
+                # Asagi kesisme
+                if once > once2 and sonra < sonra2:
+                    son_fiyat = float(close.iloc[-1])
+                    son_sma50 = float(s50.iloc[-1])
+                    asagi.append({
+                        "Sembol"     : sembol,
+                        "Fiyat"      : round(son_fiyat, 2),
+                        "EMA"+ str(ema1_len): round(float(e1.iloc[-1]), 2),
+                        "EMA"+ str(ema2_len): round(float(e2.iloc[-1]), 2),
+                        "SMA"+ str(sma_len) : round(son_sma50, 2),
+                        "Kesisme_Bar": i,
+                        "Durum"      : "ASAGI KESIS",
+                    })
+                    break
+
+        except Exception:
+            continue
+
+    df_yukari = pd.DataFrame(yukari).sort_values("Uzaklik_%") if yukari else pd.DataFrame()
+    df_asagi  = pd.DataFrame(asagi).sort_values("Kesisme_Bar") if asagi else pd.DataFrame()
+    return df_yukari, df_asagi
+
+
+def scan_ticker(ticker, interval, days_back, strategies, trend_period, son_n,
+                bolge_filtre="Filtre Yok",
+                pullback_lookback=10, pullback_tolerance=2.0,
+                pullback_rsi_min=40, pullback_rsi_max=60,
                 resistance_lookback=20, min_volume_increase=20):
     end = datetime.today()
     start = end - timedelta(days=days_back)
     try:
-        df = yf.download(
-            ticker, start=start, end=end,
-            interval=interval, progress=False, auto_adjust=False
-        )
+        df = yf.download(ticker, start=start, end=end,
+                         interval=interval, progress=False, auto_adjust=False)
     except Exception:
         return []
 
     min_bars = {"1d": 60, "1wk": 30, "1mo": 12}
     min_required = min_bars.get(interval, 30)
-
     if df is None or df.empty or len(df) < min_required:
         return []
     if isinstance(df.columns, pd.MultiIndex):
@@ -332,20 +353,18 @@ def scan_ticker(ticker, interval, days_back, strategies, trend_period, son_n, bo
     if not {"Open", "High", "Low", "Close"}.issubset(df.columns):
         return []
 
-    # Tüm kolonları squeeze et - MultiIndex sorununu önle
     df["Open"]  = df["Open"].squeeze()
     df["High"]  = df["High"].squeeze()
     df["Low"]   = df["Low"].squeeze()
     df["Close"] = df["Close"].squeeze()
     if "Volume" in df.columns:
         df["Volume"] = df["Volume"].squeeze()
-    
+
     closes = df["Close"]
     emas   = calc_emas(closes)
     rsi    = calc_rsi(closes)
     n      = len(df)
     results = []
-
     min_ema_warmup = min(55, n - son_n - 1)
 
     for i in range(max(min_ema_warmup, trend_period, n - son_n), n):
@@ -357,7 +376,7 @@ def scan_ticker(ticker, interval, days_back, strategies, trend_period, son_n, bo
 
         if "Cekic" in strategies:
             if check_hammer(o, h, l, c) and is_downtrend(closes, i, trend_period) and check_bolge(closes, emas, rsi, i, bolge_filtre):
-                signals.append("Çekiç")
+                signals.append("Cekic")
 
         if "Yutan" in strategies and i >= 1:
             o1 = float(df["Open"].iloc[i - 1])
@@ -366,62 +385,44 @@ def scan_ticker(ticker, interval, days_back, strategies, trend_period, son_n, bo
                 signals.append("Yutan")
 
         if "Sabah Yildizi" in strategies and i >= 2:
-            rows = [
-                (
-                    float(df["Open"].iloc[i - 2 + j]),
-                    float(df["High"].iloc[i - 2 + j]),
-                    float(df["Low"].iloc[i - 2 + j]),
-                    float(df["Close"].iloc[i - 2 + j]),
-                )
-                for j in range(3)
-            ]
+            rows = [(float(df["Open"].iloc[i-2+j]), float(df["High"].iloc[i-2+j]),
+                     float(df["Low"].iloc[i-2+j]),  float(df["Close"].iloc[i-2+j])) for j in range(3)]
             if check_morning_star(rows) and check_bolge(closes, emas, rsi, i, bolge_filtre):
-                signals.append("Sabah Yıldızı")
+                signals.append("Sabah Yildizi")
 
         if "Three Inside Up" in strategies and i >= 2:
-            rows3 = [
-                (
-                    float(df["Open"].iloc[i - 2 + j]),
-                    float(df["High"].iloc[i - 2 + j]),
-                    float(df["Low"].iloc[i - 2 + j]),
-                    float(df["Close"].iloc[i - 2 + j]),
-                )
-                for j in range(3)
-            ]
+            rows3 = [(float(df["Open"].iloc[i-2+j]), float(df["High"].iloc[i-2+j]),
+                      float(df["Low"].iloc[i-2+j]),  float(df["Close"].iloc[i-2+j])) for j in range(3)]
             if check_three_inside_up(rows3) and is_downtrend(closes, i, trend_period) and check_bolge(closes, emas, rsi, i, bolge_filtre):
                 signals.append("Three Inside Up")
 
         if "RSI Uyumsuzlugu" in strategies:
             if check_bullish_divergence(closes, rsi, i):
-                signals.append("Pozitif RSI Uyumsuzluğu")
+                signals.append("Pozitif RSI Uyumsuzlugu")
 
-        # ── Golden Cross: EMA50 EMA200'ü yukarı kesiyor, fiyat EMA20 üstünde ──
         if "Golden Cross" in strategies:
             if check_golden_cross(emas, closes, i):
                 signals.append("Golden Cross [EMA50>EMA200 & Fiyat>EMA20]")
 
-        # ── YENİ: Düşeni Kıran ──
         if "Duseni Kiran" in strategies:
             if check_duseni_kiran(df, i, lookback=resistance_lookback):
                 resistance = float(df["High"].iloc[max(0, i - resistance_lookback): i].max())
-                signals.append(f"Düşeni Kıran [Direnç: {resistance:.2f}]")
+                signals.append("Duseni Kiran [Direnc: " + str(round(resistance,2)) + "]")
 
-        # ── YENİ: Pullback ──
         if "Pullback" in strategies:
-            pb_result = check_pullback(df, emas, rsi, i, 
-                                      lookback=pullback_lookback,
-                                      tolerance=pullback_tolerance,
-                                      rsi_min=pullback_rsi_min,
-                                      rsi_max=pullback_rsi_max)
-            if pb_result[0]:  # pullback_confirmed
-                ema20_val = float(emas[20].iloc[i])
+            pb_result = check_pullback(df, emas, rsi, i,
+                                       lookback=pullback_lookback,
+                                       tolerance=pullback_tolerance,
+                                       rsi_min=pullback_rsi_min,
+                                       rsi_max=pullback_rsi_max)
+            if pb_result[0]:
+                ema20_val    = float(emas[20].iloc[i])
                 distance_pct = pb_result[1]
-                signals.append(f"Pullback [EMA20: {ema20_val:.2f}, Mesafe: {distance_pct:.1f}%]")
+                signals.append("Pullback [EMA20: " + str(round(ema20_val,2)) + ", Mesafe: " + str(round(distance_pct,1)) + "%]")
 
         if signals:
             e = {p: round(float(emas[p].iloc[i]), 2) for p in [5, 14, 34, 55]}
             hafta_farki = n - 1 - i
-
             row = {
                 "Hisse":   ticker.replace(".IS", ""),
                 "Tarih":   df.index[i].strftime("%Y-%m-%d"),
@@ -443,12 +444,10 @@ def scan_ticker(ticker, interval, days_back, strategies, trend_period, son_n, bo
 
 
 def draw_chart(ticker, interval, days_back, signal_dates):
-    end_dt = datetime.today()
+    end_dt   = datetime.today()
     start_dt = end_dt - timedelta(days=days_back)
-    df = yf.download(
-        ticker, start=start_dt, end=end_dt,
-        interval=interval, progress=False, auto_adjust=False
-    )
+    df = yf.download(ticker, start=start_dt, end=end_dt,
+                     interval=interval, progress=False, auto_adjust=False)
     if df is None or df.empty:
         return
     if isinstance(df.columns, pd.MultiIndex):
@@ -459,311 +458,308 @@ def draw_chart(ticker, interval, days_back, signal_dates):
     df["High"]  = df["High"].squeeze()
     df["Low"]   = df["Low"].squeeze()
     df["Close"] = df["Close"].squeeze()
-    
-    emas   = calc_emas(closes)
-    rsi    = calc_rsi(closes)
+    emas = calc_emas(closes)
+    rsi  = calc_rsi(closes)
 
     from plotly.subplots import make_subplots
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
+                        row_heights=[0.68, 0.32], vertical_spacing=0.03)
 
-    fig = make_subplots(
-        rows=2, cols=1,
-        shared_xaxes=True,
-        row_heights=[0.68, 0.32],
-        vertical_spacing=0.03,
-    )
+    fig.add_trace(go.Candlestick(
+        x=list(range(len(df))),
+        open=df["Open"].tolist(), high=df["High"].tolist(),
+        low=df["Low"].tolist(),   close=closes.tolist(),
+        name=ticker,
+        increasing_line_color="#16a34a", decreasing_line_color="#dc2626",
+        increasing_fillcolor="#16a34a",  decreasing_fillcolor="#dc2626",
+    ), row=1, col=1)
 
-    # Mum grafiği
-    fig.add_trace(
-        go.Candlestick(
-            x=list(range(len(df))),
-            open=df["Open"].tolist(),
-            high=df["High"].tolist(),
-            low=df["Low"].tolist(),
-            close=closes.tolist(),
-            name=ticker,
-            increasing_line_color="#00d4aa",
-            decreasing_line_color="#ff6b6b",
-            increasing_fillcolor="#00d4aa",
-            decreasing_fillcolor="#ff6b6b",
-        ),
-        row=1, col=1,
-    )
-
-    colors = {5: "#ffd166", 14: "#0099ff", 20: "#00d4aa", 34: "#ff6b6b", 55: "#cc88ff"}
+    colors = {5: "#f59e0b", 14: "#2563eb", 20: "#059669", 34: "#dc2626", 55: "#7c3aed"}
     for p, col in colors.items():
-        fig.add_trace(
-            go.Scatter(
-                x=list(range(len(df))),
-                y=emas[p].tolist(),
-                name="EMA" + str(p),
-                line=dict(color=col, width=1.5),
-            ),
-            row=1, col=1,
-        )
+        fig.add_trace(go.Scatter(
+            x=list(range(len(df))), y=emas[p].tolist(),
+            name="EMA" + str(p), line=dict(color=col, width=1.5),
+        ), row=1, col=1)
 
-    # Düşeni Kıran ve Pullback sinyal işaretleri
     for sd in signal_dates:
         try:
             ts  = pd.Timestamp(sd)
             pos = df.index.get_loc(ts)
-            
-            # Düşeni Kıran: Son 20 mumdaki en yüksek direnci çiz
             if pos >= 20:
                 lookback_start = max(0, pos - 20)
                 resistance = float(df["High"].iloc[lookback_start:pos].max())
-                
-                # Direnç çizgisi (kırmızı kesikli)
-                fig.add_shape(
-                    type="line",
-                    x0=lookback_start, x1=pos,
-                    y0=resistance, y1=resistance,
-                    line=dict(color="#ff6b6b", width=2, dash="dash"),
-                    row=1, col=1,
-                )
-                
-                # Direnç etiketi
-                fig.add_annotation(
-                    x=pos - 10, y=resistance,
-                    text=f"Direnç: {resistance:.2f}",
-                    showarrow=False,
-                    font=dict(color="#ff6b6b", size=10),
-                    bgcolor="rgba(0,0,0,0.5)",
-                    row=1, col=1,
-                )
-            
-            # Pullback: EMA20'ye dokunma bölgesini vurgula
-            if pos >= 10:
-                lookback_start = max(0, pos - 10)
-                ema20_val = float(emas[20].iloc[pos])
-                
-                # EMA20 geri çekilme bölgesini yeşil arka plan ile vurgula
-                for i in range(lookback_start, pos):
-                    low_i = float(df["Low"].iloc[i])
-                    if low_i <= ema20_val * 1.02:  # EMA20'ye %2 içinde yaklaştı
-                        fig.add_vrect(
-                            x0=i-0.5, x1=i+0.5,
-                            fillcolor="rgba(0, 212, 170, 0.1)",
-                            line_width=0,
-                            row=1, col=1,
-                        )
-            
-            # Sinyal ok işareti
+                fig.add_shape(type="line",
+                    x0=lookback_start, x1=pos, y0=resistance, y1=resistance,
+                    line=dict(color="#dc2626", width=2, dash="dash"), row=1, col=1)
             low_val = float(df["Low"].iloc[pos]) * 0.98
-            fig.add_annotation(
-                x=pos, y=low_val,
-                text="▲",
-                font=dict(color="#ffd166", size=18),
-                showarrow=False,
-                row=1, col=1,
-            )
+            fig.add_annotation(x=pos, y=low_val, text="▲",
+                font=dict(color="#f59e0b", size=18), showarrow=False, row=1, col=1)
         except Exception:
             pass
 
-    # RSI paneli
-    fig.add_trace(
-        go.Scatter(
-            x=list(range(len(df))),
-            y=rsi.tolist(),
-            name="RSI 14",
-            line=dict(color="#a78bfa", width=1.5),
-        ),
-        row=2, col=1,
-    )
-    fig.add_hline(y=70, line=dict(color="#ff6b6b", width=1, dash="dash"), row=2, col=1)
-    fig.add_hline(y=30, line=dict(color="#00d4aa", width=1, dash="dash"), row=2, col=1)
+    fig.add_trace(go.Scatter(
+        x=list(range(len(df))), y=rsi.tolist(),
+        name="RSI 14", line=dict(color="#7c3aed", width=1.5),
+    ), row=2, col=1)
+    fig.add_hline(y=70, line=dict(color="#dc2626", width=1, dash="dash"), row=2, col=1)
+    fig.add_hline(y=30, line=dict(color="#16a34a", width=1, dash="dash"), row=2, col=1)
 
     step   = max(1, len(df) // 10)
     tvals  = list(range(0, len(df), step))
     tlabels = [df.index[i].strftime("%Y-%m-%d") for i in tvals]
 
     fig.update_layout(
-        paper_bgcolor="#0a0e1a",
-        plot_bgcolor="#111827",
-        font=dict(color="#e2e8f0"),
-        xaxis=dict(gridcolor="#1e2d40", tickmode="array", tickvals=tvals, ticktext=tlabels, rangeslider=dict(visible=False)),
-        xaxis2=dict(gridcolor="#1e2d40", tickmode="array", tickvals=tvals, ticktext=tlabels),
-        yaxis=dict(gridcolor="#1e2d40"),
-        yaxis2=dict(gridcolor="#1e2d40"),
-        legend=dict(bgcolor="#111827", bordercolor="#1e2d40", borderwidth=1),
+        paper_bgcolor="#ffffff", plot_bgcolor="#f8fafc",
+        font=dict(color="#1a202c", family="Inter"),
+        xaxis=dict(gridcolor="#e2e8f0", tickmode="array", tickvals=tvals,
+                   ticktext=tlabels, rangeslider=dict(visible=False)),
+        xaxis2=dict(gridcolor="#e2e8f0", tickmode="array", tickvals=tvals, ticktext=tlabels),
+        yaxis=dict(gridcolor="#e2e8f0"),
+        yaxis2=dict(gridcolor="#e2e8f0"),
+        legend=dict(bgcolor="#f8fafc", bordercolor="#e2e8f0", borderwidth=1),
         margin=dict(l=10, r=10, t=30, b=10),
         height=620,
     )
     fig.update_yaxes(range=[0, 100], row=2, col=1)
-
     st.plotly_chart(fig, use_container_width=True)
 
 
-# ─── SIDEBAR ────────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════
+# SIDEBAR
+# ═══════════════════════════════════════════════════════════
 with st.sidebar:
     st.markdown("## BIST Tarayici")
     st.markdown("---")
-    periyot = st.selectbox("Periyot", list(PERIYOT_MAP.keys()), index=1)
-    interval, days_back = PERIYOT_MAP[periyot]
 
-    son_n = st.slider("Son kac mum taransin?", 1, 10, 3)
-    trend_per = st.slider("Trend periyodu (mum)", 3, 15, 5)
-    bolge_filtre = st.selectbox(
-        "Mum Formasyonu Bölge Filtresi:",
-        ["Filtre Yok", "Dip Bölgesi", "Trend Devamı", "İkisi de"],
-        index=0,
-    )
+    sekme = st.radio("Modul sec:", ["Formasyon Tarama", "EMA/SMA Kesisim"],
+                     horizontal=False)
+
     st.markdown("---")
-    
-    # Pullback Parametreleri
-    with st.expander("⚙️ Pullback Ayarları", expanded=False):
-        pullback_lookback = st.slider("Pullback Arama Periyodu", 5, 20, 10, 
-                                       help="Son kaç mumda EMA20'ye yaklaşma aranacak")
-        pullback_tolerance = st.slider("EMA20 Tolerans (%)", 0.5, 5.0, 2.0, 0.5,
-                                        help="EMA20'ye ne kadar yaklaşma kabul edilecek")
-        pullback_rsi_min = st.slider("RSI Min", 30, 50, 40,
-                                      help="Pullback için minimum RSI değeri")
-        pullback_rsi_max = st.slider("RSI Max", 50, 70, 60,
-                                      help="Pullback için maksimum RSI değeri")
-    
-    # Düşeni Kıran Parametreleri
-    with st.expander("⚙️ Düşeni Kıran Ayarları", expanded=False):
-        resistance_lookback = st.slider("Direnç Arama Periyodu", 10, 30, 20,
-                                         help="Son kaç mumdaki en yüksek seviye direnç olacak")
-        min_volume_increase = st.slider("Min Hacim Artışı (%)", 10, 50, 20,
-                                         help="Kırılma için minimum hacim artışı")
-    
-    st.markdown("---")
-    strategies = st.multiselect(
-        "Stratejiler",
-        ["Cekic", "Yutan", "Sabah Yildizi", "Three Inside Up",
-         "RSI Uyumsuzlugu", "Golden Cross", "Duseni Kiran", "Pullback"],
-        default=["Duseni Kiran", "Pullback"],
-    )
-    hisse_sec = st.multiselect(
-        "Hisse filtresi (bos=tumu):",
-        [h.replace(".IS", "") for h in HISSELER],
-        default=[],
-    )
-    st.markdown("---")
-    btn = st.button("TARAMAYI BASLAT")
+
+    if sekme == "Formasyon Tarama":
+        periyot = st.selectbox("Periyot", list(PERIYOT_MAP.keys()), index=1)
+        interval, days_back = PERIYOT_MAP[periyot]
+        son_n      = st.slider("Son kac mum taransin?", 1, 10, 3)
+        trend_per  = st.slider("Trend periyodu (mum)", 3, 15, 5)
+        bolge_filtre = st.selectbox(
+            "Bolge Filtresi:",
+            ["Filtre Yok", "Dip Bolgesi", "Trend Devami", "Ikisi de"], index=0)
+        st.markdown("---")
+        with st.expander("Pullback Ayarlari", expanded=False):
+            pullback_lookback  = st.slider("Arama Periyodu", 5, 20, 10)
+            pullback_tolerance = st.slider("EMA20 Tolerans (%)", 0.5, 5.0, 2.0, 0.5)
+            pullback_rsi_min   = st.slider("RSI Min", 30, 50, 40)
+            pullback_rsi_max   = st.slider("RSI Max", 50, 70, 60)
+        with st.expander("Duseni Kiran Ayarlari", expanded=False):
+            resistance_lookback  = st.slider("Direnc Periyodu", 10, 30, 20)
+            min_volume_increase  = st.slider("Min Hacim Artisi (%)", 10, 50, 20)
+        st.markdown("---")
+        strategies = st.multiselect(
+            "Stratejiler",
+            ["Cekic","Yutan","Sabah Yildizi","Three Inside Up",
+             "RSI Uyumsuzlugu","Golden Cross","Duseni Kiran","Pullback"],
+            default=["Duseni Kiran","Pullback"])
+        hisse_sec = st.multiselect(
+            "Hisse filtresi (bos=tumu):",
+            [h.replace(".IS","") for h in HISSELER], default=[])
+        st.markdown("---")
+        btn_formasyon = st.button("TARAMAYI BASLAT")
+
+    else:  # EMA/SMA Kesisim
+        periyot_ema = st.selectbox("Periyot", list(PERIYOT_MAP.keys()), index=0)
+        interval_ema, days_back_ema = PERIYOT_MAP[periyot_ema]
+        st.markdown("---")
+        col1, col2 = st.columns(2)
+        ema1_len = col1.number_input("EMA 1", value=14, min_value=1, max_value=200)
+        ema2_len = col2.number_input("EMA 2", value=21, min_value=1, max_value=200)
+        sma_len  = st.number_input("SMA", value=50, min_value=1, max_value=500)
+        uzaklasma = st.slider("Yukari kesis max uzaklik %", 0.5, 15.0, 3.0, 0.5,
+                              help="EMA14 ile SMA50 arasindaki max uzaklik")
+        bar_limit = st.slider("Son kac barda kesisti?", 1, 10, 3)
+        st.markdown("---")
+        btn_ema = st.button("TARAMAYI BASLAT")
+
     st.caption(str(len(HISSELER)) + " hisse listede")
 
+
+# ═══════════════════════════════════════════════════════════
+# ANA SAYFA
+# ═══════════════════════════════════════════════════════════
+st.markdown("# BIST Tarayici")
+
+if sekme == "Formasyon Tarama":
+    st.markdown("**Mod:** Formasyon Tarama")
     st.markdown("---")
-    st.info(
-        "**Yeni Stratejiler:**\n\n"
-        "🔥 **Düşeni Kıran**: Son N mumdaki en yüksek seviyeyi (direnç) yukarı kırma. Hacim artışı ile doğrulanır.\n\n"
-        "📉 **Pullback**: Yükseliş trendinde fiyat EMA20'ye geri çekilip tekrar yükseliyor. Sağlıklı düzeltme fırsatı.\n\n"
-        "⚙️ **Pine Script Uyumlu**: TradingView ile aynı mantık ve parametreler. Ayarları yukarıdan özelleştirebilirsin!"
-    )
 
-st.markdown("# BIST Formasyon Tarayici")
-st.markdown("Periyot: " + periyot + " | Stratejiler: " + (", ".join(strategies) if strategies else "-"))
-st.markdown("---")
-
-if "results" not in st.session_state:
-    st.session_state.results = []
-    st.session_state.done = False
-    st.session_state.bolge_filtre = "Filtre Yok"
-
-if btn:
-    if not strategies:
-        st.warning("En az bir strateji sec!")
-    else:
-        st.session_state.bolge_filtre = bolge_filtre
-        if hisse_sec:
-            taranacak = [h for h in HISSELER if h.replace(".IS", "") in hisse_sec]
-        else:
-            taranacak = HISSELER
-
+    if "results" not in st.session_state:
         st.session_state.results = []
-        all_res = []
-        prog = st.progress(0)
-        durum = st.empty()
-        sayi = st.empty()
+        st.session_state.done    = False
 
-        for i, ticker in enumerate(taranacak):
-            durum.caption("Taraniyor: " + ticker)
-            prog.progress((i + 1) / len(taranacak))
-            rows = scan_ticker(ticker, interval, days_back, strategies, trend_per, son_n, st.session_state.bolge_filtre,
-                             pullback_lookback=pullback_lookback,
-                             pullback_tolerance=pullback_tolerance,
-                             pullback_rsi_min=pullback_rsi_min,
-                             pullback_rsi_max=pullback_rsi_max,
-                             resistance_lookback=resistance_lookback,
-                             min_volume_increase=min_volume_increase)
-            all_res.extend(rows)
-            sayi.markdown("Bulunan sinyal: " + str(len(all_res)))
-            if (i + 1) % 25 == 0:
-                time.sleep(0.3)
+    if btn_formasyon:
+        if not strategies:
+            st.warning("En az bir strateji sec!")
+        else:
+            taranacak = [h for h in HISSELER if h.replace(".IS","") in hisse_sec] if hisse_sec else HISSELER
+            st.session_state.results = []
+            all_res = []
+            prog  = st.progress(0)
+            durum = st.empty()
+            sayi  = st.empty()
 
-        prog.empty()
-        durum.empty()
-        st.session_state.results = all_res
-        st.session_state.done = True
+            for i, ticker in enumerate(taranacak):
+                durum.caption("Taraniyor: " + ticker)
+                prog.progress((i + 1) / len(taranacak))
+                rows = scan_ticker(ticker, interval, days_back, strategies, trend_per, son_n,
+                                   bolge_filtre, pullback_lookback, pullback_tolerance,
+                                   pullback_rsi_min, pullback_rsi_max,
+                                   resistance_lookback, min_volume_increase)
+                all_res.extend(rows)
+                sayi.markdown("Bulunan sinyal: **" + str(len(all_res)) + "**")
+                if (i + 1) % 25 == 0:
+                    time.sleep(0.3)
 
-if st.session_state.done:
-    res = st.session_state.results
-    if not res:
-        st.info("Hic sinyal bulunamadi. Parametreleri gevset.")
+            prog.empty(); durum.empty()
+            st.session_state.results = all_res
+            st.session_state.done    = True
+
+    if st.session_state.get("done"):
+        res = st.session_state.results
+        if not res:
+            st.info("Hic sinyal bulunamadi. Parametreleri gevset.")
+        else:
+            df_r = pd.DataFrame(res)
+            df_r.sort_values(["Tarih","Hisse"], ascending=[False,True], inplace=True)
+            df_r.reset_index(drop=True, inplace=True)
+
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Toplam Sinyal",    len(df_r))
+            c2.metric("Benzersiz Hisse",  df_r["Hisse"].nunique())
+            c3.metric("Bu Periyot",       len(df_r[df_r["Zaman"] == "Bu periyot"]))
+            c4.metric("Taranan",          len(HISSELER))
+            st.markdown("---")
+
+            f1, f2 = st.columns(2)
+            fs = f1.multiselect("Sinyale filtrele:", df_r["Sinyal"].unique(), default=[])
+            fz = f2.multiselect("Zamana filtrele:",  df_r["Zaman"].unique(),  default=[])
+
+            df_show = df_r.copy()
+            if fs: df_show = df_show[df_show["Sinyal"].isin(fs)]
+            if fz: df_show = df_show[df_show["Zaman"].isin(fz)]
+
+            show_cols = ["Hisse","Tarih","Sinyal","Kapanis","RSI14","EMA5","EMA14","EMA34","EMA55","Zaman"]
+            st.markdown("### Sonuclar: " + str(len(df_show)) + " sinyal")
+            st.dataframe(df_show[show_cols], use_container_width=True, hide_index=True)
+
+            csv = df_show.drop(columns=["_ticker","_int","_days"], errors="ignore")
+            st.download_button("CSV Indir",
+                csv.to_csv(index=False, encoding="utf-8-sig"),
+                "bist_" + datetime.now().strftime("%Y%m%d_%H%M") + ".csv", "text/csv")
+
+            st.markdown("---")
+            st.markdown("### Grafik")
+            secim = st.selectbox("Hisse sec:", df_show["Hisse"].unique().tolist())
+            if secim:
+                dates = df_show[df_show["Hisse"] == secim]["Tarih"].tolist()
+                draw_chart(secim + ".IS", interval, days_back, dates)
+                row = df_show[df_show["Hisse"] == secim].iloc[0]
+                e1c, e2c, e3c, e4c = st.columns(4)
+                e1c.metric("EMA 5",  row["EMA5"])
+                e2c.metric("EMA 14", row["EMA14"])
+                e3c.metric("EMA 34", row["EMA34"])
+                e4c.metric("EMA 55", row["EMA55"])
     else:
-        df_r = pd.DataFrame(res)
-        df_r.sort_values(["Tarih", "Hisse"], ascending=[False, True], inplace=True)
-        df_r.reset_index(drop=True, inplace=True)
+        st.info("Sol panelden strateji sec ve TARAMAYI BASLAT butonuna bas.")
 
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            st.metric("Toplam Sinyal", len(df_r))
-        with c2:
-            st.metric("Benzersiz Hisse", df_r["Hisse"].nunique())
-        with c3:
-            st.metric("Bu Periyot", len(df_r[df_r["Zaman"] == "Bu periyot"]))
-        with c4:
-            st.metric("Taranan", len(HISSELER))
+
+else:  # EMA/SMA Kesisim modulu
+    st.markdown("**Mod:** EMA/SMA Kesisim Tarama")
+    st.markdown("---")
+
+    if "ema_done" not in st.session_state:
+        st.session_state.ema_done    = False
+        st.session_state.ema_yukari  = pd.DataFrame()
+        st.session_state.ema_asagi   = pd.DataFrame()
+
+    if btn_ema:
+        prog  = st.progress(0)
+        durum = st.empty()
+        df_dict = {}
+
+        for i, sembol in enumerate(HISSELER):
+            durum.text("Cekiliyor: " + sembol + " (" + str(i+1) + "/" + str(len(HISSELER)) + ")")
+            try:
+                raw = yf.download(sembol, period="6mo", interval=interval_ema,
+                                  progress=False, auto_adjust=True)
+                if not raw.empty:
+                    if isinstance(raw.columns, pd.MultiIndex):
+                        raw.columns = raw.columns.get_level_values(0)
+                    df_dict[sembol.replace(".IS","")] = raw
+            except Exception:
+                pass
+            prog.progress((i + 1) / len(HISSELER))
+
+        prog.empty(); durum.empty()
+
+        yukari, asagi = tarama_ema_sma(df_dict, ema1_len, ema2_len, sma_len, uzaklasma, bar_limit)
+        st.session_state.ema_yukari = yukari
+        st.session_state.ema_asagi  = asagi
+        st.session_state.ema_done   = True
+
+    if st.session_state.ema_done:
+        yukari = st.session_state.ema_yukari
+        asagi  = st.session_state.ema_asagi
+
+        # Metrikler
+        yukari_gecen = yukari[yukari["Durum"] == "YUKARI KESIS"] if not yukari.empty else pd.DataFrame()
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Yukari Kesis (yakin)", len(yukari_gecen))
+        c2.metric("Yukari Kesis (toplam)", len(yukari) if not yukari.empty else 0)
+        c3.metric("Asagi Kesis", len(asagi) if not asagi.empty else 0)
+        st.markdown("---")
+
+        # YUKARI KESİŞİM
+        st.markdown("### Yukari Kesisim — SMA" + str(st.session_state.get("sma_len", sma_len)) + " Yakin")
+
+        if not yukari.empty and not yukari_gecen.empty:
+            def style_yukari(row):
+                return ["background-color:#dcfce7; color:#166534; font-weight:600"] * len(row)
+            st.dataframe(
+                yukari_gecen.style.apply(style_yukari, axis=1),
+                use_container_width=True, hide_index=True)
+
+            st.markdown("**TradingView:**")
+            linkler = "  |  ".join(
+                "[" + s + "](https://www.tradingview.com/chart/?symbol=BIST:" + s + ")"
+                for s in yukari_gecen["Sembol"].tolist()
+            )
+            st.markdown(linkler)
+        else:
+            st.info("SMA uzaklik filtresini gecen yukari kesisim bulunamadi.")
+
+        if not yukari.empty:
+            uzak = yukari[yukari["Durum"] != "YUKARI KESIS"]
+            if not uzak.empty:
+                with st.expander("Uzakta kalanlar (" + str(len(uzak)) + " hisse)"):
+                    st.dataframe(uzak, use_container_width=True, hide_index=True)
 
         st.markdown("---")
 
-        f1, f2 = st.columns(2)
-        with f1:
-            fs = st.multiselect("Sinyale filtrele:", df_r["Sinyal"].unique(), default=[])
-        with f2:
-            fz = st.multiselect("Zamana filtrele:", df_r["Zaman"].unique(), default=[])
+        # AŞAĞI KESİŞİM
+        st.markdown("### Asagi Kesisim")
+        if not asagi.empty:
+            def style_asagi(row):
+                return ["background-color:#fee2e2; color:#991b1b; font-weight:600"] * len(row)
+            st.dataframe(
+                asagi.style.apply(style_asagi, axis=1),
+                use_container_width=True, hide_index=True)
+        else:
+            st.info("Asagi kesisim bulunamadi.")
 
-        df_show = df_r.copy()
-        if fs:
-            df_show = df_show[df_show["Sinyal"].isin(fs)]
-        if fz:
-            df_show = df_show[df_show["Zaman"].isin(fz)]
-
-        show_cols = ["Hisse", "Tarih", "Sinyal", "Kapanis", "RSI14", "EMA5", "EMA14", "EMA34", "EMA55", "Zaman"]
-
-        st.markdown("### Sonuclar: " + str(len(df_show)) + " sinyal")
-        st.dataframe(
-            df_show[show_cols],
-            use_container_width=True,
-            hide_index=True,
-        )
-
-        csv = df_show.drop(columns=["_ticker", "_int", "_days"], errors="ignore")
-        st.download_button(
-            "CSV Indir",
-            csv.to_csv(index=False, encoding="utf-8-sig"),
-            "bist_" + datetime.now().strftime("%Y%m%d_%H%M") + ".csv",
-            "text/csv",
-        )
-
-        st.markdown("---")
-        st.markdown("### Grafik")
-        secim = st.selectbox("Hisse sec:", df_show["Hisse"].unique().tolist())
-        if secim:
-            ticker_f = secim + ".IS"
-            dates = df_show[df_show["Hisse"] == secim]["Tarih"].tolist()
-
-            draw_chart(ticker_f, interval, days_back, dates)
-
-            row = df_show[df_show["Hisse"] == secim].iloc[0]
-            e1, e2, e3, e4 = st.columns(4)
-            with e1:
-                st.metric("EMA 5", row["EMA5"])
-            with e2:
-                st.metric("EMA 14", row["EMA14"])
-            with e3:
-                st.metric("EMA 34", row["EMA34"])
-            with e4:
-                st.metric("EMA 55", row["EMA55"])
-else:
-    st.info("Sol panelden periyot ve strateji sec, ardından TARAMAYI BASLAT butonuna bas.")
+    else:
+        st.info("Sol panelden ayarlari sec ve TARAMAYI BASLAT butonuna bas.")
+        st.markdown("""
+        **Nasil Calisir:**
+        - **Yukari Kesis:** EMA14 asagidan yukari gecti + SMA50 yakininda (uzaklik % ayarlanabilir)
+        - **Asagi Kesis:** EMA14 yukaridan asagi gecti
+        - Periyot, EMA/SMA uzunluklari ve uzaklik limiti sidebar'dan ayarlanabilir
+        """)
