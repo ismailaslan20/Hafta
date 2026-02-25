@@ -688,7 +688,9 @@ else:  # EMA/SMA Kesisim modulu
         for i, sembol in enumerate(HISSELER):
             durum.text("Cekiliyor: " + sembol + " (" + str(i+1) + "/" + str(len(HISSELER)) + ")")
             try:
-                raw = yf.download(sembol, period="6mo", interval=interval_ema,
+                period_map = {"1d": "6mo", "1wk": "2y", "1mo": "5y"}
+                veri_period = period_map.get(interval_ema, "1y")
+                raw = yf.download(sembol, period=veri_period, interval=interval_ema,
                                   progress=False, auto_adjust=True)
                 if not raw.empty:
                     if isinstance(raw.columns, pd.MultiIndex):
